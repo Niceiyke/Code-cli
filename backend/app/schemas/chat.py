@@ -17,8 +17,23 @@ class Message(MessageBase):
     class Config:
         from_attributes = True
 
+class CLIBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+class CLICreate(CLIBase):
+    pass
+
+class CLI(CLIBase):
+    id: UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class SessionBase(BaseModel):
     title: Optional[str] = None
+    cli_id: Optional[UUID] = None
 
 class SessionCreate(SessionBase):
     pass
@@ -26,6 +41,7 @@ class SessionCreate(SessionBase):
 class Session(SessionBase):
     id: UUID
     created_at: datetime
+    cli_id: Optional[UUID] = None
     
     class Config:
         from_attributes = True

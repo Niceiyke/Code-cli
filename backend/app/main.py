@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import chat
+from app.api.v1.endpoints import chat, cli
 from app.db.base import Base
 from app.db.session import engine
 
@@ -10,7 +10,7 @@ app = FastAPI(title="Code-CLI API")
 async def startup():
     async with engine.begin() as conn:
         # Import models to ensure they are registered with Base
-        from app.models.chat import ChatSession, ChatMessage
+        from app.models.chat import ChatSession, ChatMessage, CLI
         await conn.run_sync(Base.metadata.create_all)
 
 app.add_middleware(
@@ -22,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
+app.include_router(cli.router, prefix="/api/v1/cli", tags=["cli"])
 
 @app.get("/health")
 async def health_check():

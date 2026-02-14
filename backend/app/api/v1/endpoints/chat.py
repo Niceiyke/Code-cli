@@ -15,7 +15,7 @@ N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
 @router.post("/sessions", response_model=Session)
 async def create_session(session_in: SessionCreate, db: AsyncSession = Depends(get_db)):
-    session = ChatSession(title=session_in.title)
+    session = ChatSession(title=session_in.title, cli_id=session_in.cli_id)
     db.add(session)
     await db.commit()
     await db.refresh(session)

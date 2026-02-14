@@ -8,14 +8,14 @@ import {
   ChevronLeft, 
   ChevronRight,
   Settings,
-  History,
   LayoutDashboard,
-  Search
+  Search,
+  X
 } from 'lucide-react';
 import axios from 'axios';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8088/api/v1';
 
 interface Message {
   id: string;
@@ -30,18 +30,59 @@ interface Session {
   created_at: string;
 }
 
+interface CLI {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
 function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [clis, setClis] = useState<CLI[]>([]);
+  const [selectedCliId, setSelectedCliId] = useState<string>('');
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isAddCliModalOpen, setIsAddCliModalOpen] = useState(false);
+  const [newCliName, setNewCliName] = useState('');
+  const [newCliDesc, setNewCliDesc] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchSessions();
+    fetchClis();
   }, []);
+
+  const fetchClis = async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/cli/`);
+      setClis(response.data);
+      if (response.data.length > 0 && !selectedCliId) {
+        setSelectedCliId(response.data[0].id);
+      }
+    } catch (error) {
+      console.error('Error fetching CLIs:', error);
+    }
+  };
+
+  const createCli = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const response = await axios.post(`${API_BASE_URL}/cli/`, {
+        name: newCliName,
+        description: newCliDesc
+      });
+      setClis([response.data, ...clis]);
+      setSelectedCliId(response.data.id);
+      setIsAddCliModalOpen(false);
+      setNewCliName('');
+      setNewCliDesc('');
+    } catch (error) {
+      console.error('Error creating CLI:', error);
+    }
+  };
 
   useEffect(() => {
     if (currentSessionId) {
@@ -78,7 +119,8 @@ function App() {
   const createNewSession = async () => {
     try {
       const response = await axios.post(`${API_BASE_URL}/chat/sessions`, {
-        title: `New Chat ${sessions.length + 1}`
+        title: `New Chat ${sessions.length + 1}`,
+        cli_id: selectedCliId || null
       });
       setSessions([response.data, ...sessions]);
       setCurrentSessionId(response.data.id);
@@ -144,10 +186,35 @@ function App() {
           </div>
         </div>
 
-        <div className="px-4 mb-4">
+        <div className="px-4 mb-4 space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+              Select CLI
+            </label>
+            <div className="flex gap-2">
+              <select 
+                value={selectedCliId}
+                onChange={(e) => setSelectedCliId(e.target.value)}
+                className="flex-1 bg-secondary/50 border border-border text-foreground text-sm rounded-lg focus:ring-primary focus:border-primary block p-2 transition-all outline-none"
+              >
+                <option value="">Default CLI</option>
+                {clis.map((cli) => (
+                  <option key={cli.id} value={cli.id}>{cli.name}</option>
+                ))}
+              </select>
+              <button 
+                onClick={() => setIsAddCliModalOpen(true)}
+                className="p-2 bg-secondary hover:bg-muted border border-border rounded-lg transition-colors"
+                title="Add New CLI"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
           <button 
             onClick={createNewSession}
-            className="w-full flex items-center justify-center gap-2 bg-secondary hover:bg-secondary/80 text-foreground py-2.5 rounded-lg border border-border transition-all duration-200 text-sm font-medium"
+            className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white py-2.5 rounded-lg transition-all duration-200 text-sm font-medium shadow-lg shadow-primary/10"
           >
             <Plus className="w-4 h-4" />
             New Conversation
@@ -309,6 +376,66 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Add CLI Modal */}
+      {isAddCliModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+          >
+            <div className="p-6 border-b border-border flex items-center justify-between bg-muted/30">
+              <h3 className="text-xl font-bold">Add New CLI</h3>
+              <button 
+                onClick={() => setIsAddCliModalOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <form onSubmit={createCli} className="p-6 space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">CLI Name</label>
+                <input 
+                  autoFocus
+                  required
+                  type="text" 
+                  value={newCliName}
+                  onChange={(e) => setNewCliName(e.target.value)}
+                  placeholder="e.g. Gemini CLI, Claude Code"
+                  className="w-full bg-secondary/50 border border-border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Description (Optional)</label>
+                <textarea 
+                  value={newCliDesc}
+                  onChange={(e) => setNewCliDesc(e.target.value)}
+                  placeholder="What does this CLI do?"
+                  rows={3}
+                  className="w-full bg-secondary/50 border border-border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all resize-none"
+                />
+              </div>
+              <div className="pt-4 flex gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setIsAddCliModalOpen(false)}
+                  className="flex-1 px-4 py-2.5 bg-secondary hover:bg-muted text-foreground font-medium rounded-xl transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  className="flex-1 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white font-medium rounded-xl transition-all shadow-lg shadow-primary/20"
+                >
+                  Create CLI
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
