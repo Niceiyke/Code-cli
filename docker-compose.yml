@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=codecli
+    networks:
+      - code-cli-network
+
+  backend:
+    build: ./backend
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/codecli
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    networks:
+      - code-cli-network
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    networks:
+      - code-cli-network
+
+networks:
+  code-cli-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
