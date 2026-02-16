@@ -2,15 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    --background: #ffffff;
+    --foreground: #020617;
+    --card: #f8fafc;
+    --card-foreground: #020617;
+    --primary: #3b82f6;
+    --primary-foreground: #ffffff;
+    --secondary: #f1f5f9;
+    --secondary-foreground: #0f172a;
+    --accent: #0ea5e9;
+    --accent-foreground: #ffffff;
+    --muted: #f1f5f9;
+    --muted-foreground: #64748b;
+    --border: #e2e8f0;
+    --input: #e2e8f0;
+    --ring: #3b82f6;
+  }
+
+  .dark {
+    --background: #020617;
+    --foreground: #f8fafc;
+    --card: #0f172a;
+    --card-foreground: #f8fafc;
+    --primary: #3b82f6;
+    --primary-foreground: #ffffff;
+    --secondary: #1e293b;
+    --secondary-foreground: #f8fafc;
+    --accent: #0ea5e9;
+    --accent-foreground: #ffffff;
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --border: #1e293b;
+    --input: #1e293b;
+    --ring: #3b82f6;
+  }
+}
+
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: dark;
-  background-color: #0a0b10;
-  color: #f8fafc;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -22,6 +55,8 @@ body {
   display: flex;
   min-width: 320px;
   min-height: 100vh;
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 #root {
@@ -29,9 +64,14 @@ body {
 }
 
 .glass {
-  background: rgba(21, 23, 30, 0.7);
+  background: rgba(21, 23, 30, 0.4);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.dark .glass {
+  background: rgba(15, 23, 42, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -44,14 +84,19 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #0a0b10;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: var(--border);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: var(--muted-foreground);
+}
+
+textarea {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }

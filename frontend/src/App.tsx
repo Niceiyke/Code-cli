@@ -55,7 +55,45 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return document.documentElement.classList.contains('dark') || 
+             window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return true;
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  // Adjust sidebar for mobile on initial load
+  useEffect(() => {
+    const checkMobile = () => {
+      if (window.innerWidth < 768) {
+        setIsSidebarOpen(false);
+      } else {
+        setIsSidebarOpen(true);
+      }
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
 
   const filteredSessions = sessions.filter(session => 
     session.title?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -167,9 +205,9 @@ function App() {
     }
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || !currentSessionId) return;
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!input.trim() || !currentSessionId || isLoading) return;
 
     const userMessage = input;
     setInput('');
@@ -190,14 +228,7 @@ function App() {
         content: userMessage
       });
 
-      // Update messages with actual data from server (includes AI response)
-      setMessages(prev => {
-        // Remove optimistic and add real
-        const filtered = prev.filter(m => m.id !== optimisticMsg.id);
-        return [...filtered, { role: 'user', content: userMessage, id: 'real-user', created_at: '' }, response.data];
-      });
-      
-      // Better: refetch session messages to be safe
+      // Refetch session messages to get the thinking message or actual response
       fetchSessionMessages(currentSessionId);
     } catch (error) {
       console.error('Error sending message:', error);
@@ -206,13 +237,31 @@ function App() {
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans">
+      {/* Sidebar Overlay for Mobile */}
+      {isSidebarOpen && window.innerWidth < 768 && (
+        <div 
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <motion.div 
         initial={false}
-        animate={{ width: isSidebarOpen ? 280 : 0 }}
-        className="bg-card border-r border-border flex flex-col h-full overflow-hidden"
+        animate={{ 
+          width: isSidebarOpen ? (window.innerWidth < 768 ? 280 : 280) : 0,
+          x: isSidebarOpen ? 0 : (window.innerWidth < 768 ? -280 : 0)
+        }}
+        className={`fixed md:relative z-50 bg-card border-r border-border flex flex-col h-full overflow-hidden transition-all duration-300 shadow-xl md:shadow-none`}
       >
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -221,6 +270,12 @@ function App() {
             </div>
             <span className="font-bold text-lg tracking-tight">Code-CLI</span>
           </div>
+          <button 
+            onClick={() => setIsSidebarOpen(false)}
+            className="md:hidden p-2 text-muted-foreground hover:text-foreground"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         <div className="px-4 mb-4 space-y-3">
@@ -281,6 +336,7 @@ function App() {
               onClick={() => {
                 setCurrentSessionId(session.id);
                 setPath(session.path);
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
               }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group relative ${
                 currentSessionId === session.id 
@@ -313,23 +369,23 @@ function App() {
       </motion.div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col relative h-full">
+      <div className="flex-1 flex flex-col relative h-full w-full">
         {/* Toggle Sidebar Button */}
         <button 
           onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          className="absolute -left-3 top-1/2 transform -translate-y-1/2 w-6 h-6 bg-card border border-border rounded-full flex items-center justify-center z-10 hover:bg-muted transition-colors"
+          className={`absolute ${isSidebarOpen ? 'left-0' : 'left-0 md:left-2'} top-4 md:top-1/2 md:transform md:-translate-y-1/2 w-8 h-8 md:w-6 md:h-6 bg-card border border-border rounded-r-lg md:rounded-full flex items-center justify-center z-30 hover:bg-muted transition-all shadow-md`}
         >
-          {isSidebarOpen ? <ChevronLeft className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          {isSidebarOpen ? <ChevronLeft className="w-4 h-4 md:w-3 md:h-3" /> : <ChevronRight className="w-4 h-4 md:w-3 md:h-3" />}
         </button>
 
         {/* Header */}
-        <header className="h-16 border-b border-border flex items-center justify-between px-6 glass">
-          <div className="flex items-center gap-4">
-            <h2 className="font-semibold text-lg">
+        <header className="h-16 border-b border-border flex items-center justify-between px-4 md:px-6 glass">
+          <div className="flex items-center gap-4 ml-8 md:ml-0">
+            <h2 className="font-semibold text-base md:text-lg truncate max-w-[150px] md:max-w-none">
               {sessions.find(s => s.id === currentSessionId)?.title || 'Select a conversation'}
             </h2>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-4">
             <button 
               onClick={() => setIsSearchOpen(true)}
               className="bg-secondary p-2 rounded-full cursor-pointer hover:bg-muted transition-colors"
@@ -346,7 +402,7 @@ function App() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {currentSessionId ? (
             <>
               {messages.length === 0 && !isLoading && (
@@ -355,7 +411,7 @@ function App() {
                     <Bot className="w-8 h-8 text-primary" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">How can I help you today?</h3>
-                  <p className="text-muted-foreground">
+                  <p className="text-muted-foreground px-4">
                     Ask me anything about code, logic, or just have a chat. Your fintech-ready assistant is here.
                   </p>
                 </div>
@@ -367,13 +423,13 @@ function App() {
                   key={message.id}
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  <div className={`flex gap-4 max-w-[80%] ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                  <div className={`flex gap-3 md:gap-4 max-w-[90%] md:max-w-[80%] ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                     <div className={`w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center ${
                       message.role === 'user' ? 'bg-primary' : 'bg-card border border-border'
                     }`}>
                       {message.role === 'user' ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-primary" />}
                     </div>
-                    <div className={`p-4 rounded-2xl text-sm leading-relaxed ${
+                    <div className={`p-3 md:p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
                       message.role === 'user' 
                         ? 'bg-primary text-white shadow-lg' 
                         : 'bg-card border border-border shadow-sm'
@@ -402,11 +458,11 @@ function App() {
               <div ref={messagesEndRef} />
             </>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center">
-               <div className="w-20 h-20 rounded-3xl fintech-gradient flex items-center justify-center mb-8 shadow-2xl shadow-primary/20">
-                <LayoutDashboard className="w-10 h-10 text-white" />
+            <div className="h-full flex flex-col items-center justify-center p-4">
+               <div className="w-16 h-16 md:w-20 md:h-20 rounded-3xl fintech-gradient flex items-center justify-center mb-8 shadow-2xl shadow-primary/20">
+                <LayoutDashboard className="w-8 h-8 md:w-10 md:h-10 text-white" />
               </div>
-              <h1 className="text-3xl font-bold tracking-tight mb-4">Welcome to Code-CLI</h1>
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight mb-4 text-center">Welcome to Code-CLI</h1>
               <p className="text-muted-foreground text-center max-w-sm mb-8">
                 Select a conversation from the history or start a new one to begin your AI-powered journey.
               </p>
@@ -422,23 +478,27 @@ function App() {
 
         {/* Input Area */}
         {currentSessionId && (
-          <div className="p-6 border-t border-border glass">
-            <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto relative">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Message Code-CLI..."
-                className="w-full bg-secondary/50 border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none py-4 px-6 pr-16 rounded-2xl transition-all placeholder:text-muted-foreground"
-              />
+          <div className="p-4 md:p-6 border-t border-border glass">
+            <div className="max-w-4xl mx-auto relative flex items-end gap-2">
+              <div className="relative flex-1">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Message Code-CLI..."
+                  className="w-full bg-secondary/50 border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none py-3 px-4 md:py-4 md:px-6 rounded-2xl transition-all placeholder:text-muted-foreground resize-none min-h-[48px] max-h-[200px]"
+                />
+              </div>
               <button
-                type="submit"
+                onClick={() => handleSendMessage()}
                 disabled={!input.trim() || isLoading}
-                className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-primary text-white rounded-xl flex items-center justify-center hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground transition-all shadow-lg shadow-primary/10"
+                className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-primary text-white rounded-xl flex items-center justify-center hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground transition-all shadow-lg shadow-primary/10 flex-shrink-0"
               >
                 <Send className="w-5 h-5" />
               </button>
-            </form>
+            </div>
             <p className="text-[10px] text-muted-foreground text-center mt-3 uppercase tracking-widest font-semibold opacity-50">
               Powered by n8n & Gemini
             </p>
@@ -526,9 +586,12 @@ function App() {
             <div className="p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <span className="font-medium">Dark Mode</span>
-                <div className="w-10 h-6 bg-primary rounded-full relative cursor-pointer">
-                  <div className="absolute right-1 top-1 w-4 h-4 bg-white rounded-full shadow-sm" />
-                </div>
+                <button 
+                  onClick={() => setIsDarkMode(!isDarkMode)}
+                  className={`w-10 h-6 rounded-full relative transition-colors duration-200 ${isDarkMode ? 'bg-primary' : 'bg-secondary'}`}
+                >
+                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all duration-200 ${isDarkMode ? 'right-1' : 'left-1'}`} />
+                </button>
               </div>
               <div className="flex items-center justify-between">
                 <span className="font-medium">Notifications</span>
