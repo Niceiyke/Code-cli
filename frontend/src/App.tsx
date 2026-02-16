@@ -66,9 +66,9 @@ interface CLI {
 function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [clis, setClis] = useState<CLI[]>([]);
-  const [selectedCliId, setSelectedCliId] = useState<string>('');
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [path, setPath] = useState('/home/niceiyke');
+  const [selectedCliId, setSelectedCliId] = useState<string>(() => localStorage.getItem('selectedCliId') || '');
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => localStorage.getItem('currentSessionId'));
+  const [path, setPath] = useState(() => localStorage.getItem('workingPath') || '/home/niceiyke');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -81,11 +81,10 @@ function App() {
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
   const [isDarkMode, setIsDarkMode] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return document.documentElement.classList.contains('dark') || 
-             window.matchMedia('(prefers-color-scheme: dark)').matches;
-    }
-    return true;
+    const saved = localStorage.getItem('theme');
+    if (saved) return saved === 'dark';
+    return document.documentElement.classList.contains('dark') || 
+           window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -93,10 +92,28 @@ function App() {
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
+
+  useEffect(() => {
+    if (currentSessionId) {
+      localStorage.setItem('currentSessionId', currentSessionId);
+    } else {
+      localStorage.removeItem('currentSessionId');
+    }
+  }, [currentSessionId]);
+
+  useEffect(() => {
+    localStorage.setItem('workingPath', path);
+  }, [path]);
+
+  useEffect(() => {
+    localStorage.setItem('selectedCliId', selectedCliId);
+  }, [selectedCliId]);
 
   // Adjust sidebar for mobile on initial load
   useEffect(() => {
@@ -203,8 +220,12 @@ function App() {
 
   const createNewSession = async () => {
     try {
+      const selectedCli = clis.find(c => c.id === selectedCliId);
+      const cliName = selectedCli ? selectedCli.name : 'Default';
+      const dateStr = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      
       const response = await axios.post(`${API_BASE_URL}/chat/sessions`, {
-        title: `New Chat ${sessions.length + 1}`,
+        title: `${cliName} - ${dateStr}`,
         cli_id: selectedCliId || null,
         path: path
       });
