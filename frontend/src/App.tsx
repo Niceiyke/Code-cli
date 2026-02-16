@@ -15,8 +15,33 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import remarkGfm from 'remark-gfm';
+import { Check, Copy } from 'lucide-react';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '');
+
+const CopyButton = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="absolute right-2 top-2 p-1.5 rounded-lg bg-secondary/80 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all z-10"
+      title="Copy code"
+    >
+      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+    </button>
+  );
+};
 
 interface Message {
   id: string;
@@ -429,12 +454,43 @@ function App() {
                     }`}>
                       {message.role === 'user' ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-primary" />}
                     </div>
-                    <div className={`p-3 md:p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                    <div className={`p-3 md:p-4 rounded-2xl text-sm leading-relaxed break-words prose dark:prose-invert max-w-none ${
                       message.role === 'user' 
                         ? 'bg-primary text-white shadow-lg' 
                         : 'bg-card border border-border shadow-sm'
                     }`}>
-                      {message.content}
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code({ node, inline, className, children, ...props }: any) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            return !inline && match ? (
+                              <div className="relative group mt-2 mb-2">
+                                <CopyButton text={String(children).replace(/\n$/, '')} />
+                                <SyntaxHighlighter
+                                  style={isDarkMode ? vscDarkPlus : vs}
+                                  language={match[1]}
+                                  PreTag="div"
+                                  className="rounded-xl !bg-muted/50 !mt-0 !mb-0"
+                                  {...props}
+                                >
+                                  {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                              </div>
+                            ) : (
+                              <code className={`${className} bg-muted/50 px-1.5 py-0.5 rounded-md font-mono text-xs`} {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                          ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
+                          a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline underline-offset-4 font-medium">{children}</a>,
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
                     </div>
                   </div>
                 </motion.div>
