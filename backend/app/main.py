@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import chat, cli
+from app.api.v1.endpoints import chat_router, cli_router
 from app.db.base import Base
 from app.db.session import engine
 
@@ -21,8 +21,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
-app.include_router(cli.router, prefix="/api/v1/cli", tags=["cli"])
+app.include_router(chat_router, prefix="/api/v1/chat", tags=["chat"])
+app.include_router(cli_router, prefix="/api/v1/cli", tags=["cli"])
 
 @app.get("/health")
 async def health_check():

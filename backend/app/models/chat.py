@@ -21,6 +21,8 @@ class ChatSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String, nullable=True)
     cli_id = Column(UUID(as_uuid=True), ForeignKey("clis.id"), nullable=True)
+    path = Column(String, nullable=False, default="/home/niceiyke")
+    external_session_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     cli = relationship("CLI", back_populates="sessions")

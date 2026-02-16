@@ -10,12 +10,13 @@ import {
   Settings,
   LayoutDashboard,
   Search,
-  X
+  X,
+  Trash2
 } from 'lucide-react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8088/api/v1';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '');
 
 interface Message {
   id: string;
@@ -27,6 +28,7 @@ interface Message {
 interface Session {
   id: string;
   title: string | null;
+  path: string;
   created_at: string;
 }
 
@@ -41,21 +43,34 @@ function App() {
   const [clis, setClis] = useState<CLI[]>([]);
   const [selectedCliId, setSelectedCliId] = useState<string>('');
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [path, setPath] = useState('/home/niceiyke');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAddCliModalOpen, setIsAddCliModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    fetchSessions();
-    fetchClis();
+  const filteredSessions = sessions.filter(session => 
+    session.title?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const fetchSessions = React.useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/chat/sessions`);
+      setSessions(response.data);
+    } catch (error) {
+      console.error('Error fetching sessions:', error);
+    }
   }, []);
 
-  const fetchClis = async () => {
+  const fetchClis = React.useCallback(async () => {
     try {
       const response = await axios.get(`${API_BASE_URL}/cli/`);
       setClis(response.data);
@@ -65,16 +80,55 @@ function App() {
     } catch (error) {
       console.error('Error fetching CLIs:', error);
     }
-  };
+  }, [selectedCliId]);
+
+  const fetchSessionMessages = React.useCallback(async (sessionId: string) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/chat/sessions/${sessionId}`);
+      setMessages(response.data.messages);
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSessions();
+    fetchClis();
+  }, [fetchSessions, fetchClis]);
+
+  useEffect(() => {
+    if (currentSessionId) {
+      fetchSessionMessages(currentSessionId);
+    }
+  }, [currentSessionId, fetchSessionMessages]);
+
+  // Polling for "Thinking..." messages
+  useEffect(() => {
+    let interval: any;
+
+    const hasThinkingMessage = messages.some(m => m.content === 'Thinking...' && m.role === 'ai');
+
+    if (hasThinkingMessage && currentSessionId) {
+      interval = setInterval(() => {
+        fetchSessionMessages(currentSessionId);
+      }, 2000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [messages, currentSessionId, fetchSessionMessages]);
 
   const createCli = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newCliName.trim()) return;
+
     try {
       const response = await axios.post(`${API_BASE_URL}/cli/`, {
         name: newCliName,
         description: newCliDesc
       });
-      setClis([response.data, ...clis]);
+      setClis(prev => [response.data, ...prev]);
       setSelectedCliId(response.data.id);
       setIsAddCliModalOpen(false);
       setNewCliName('');
@@ -84,49 +138,32 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (currentSessionId) {
-      fetchSessionMessages(currentSessionId);
-    }
-  }, [currentSessionId]);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const fetchSessions = async () => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/chat/sessions`);
-      setSessions(response.data);
-    } catch (error) {
-      console.error('Error fetching sessions:', error);
-    }
-  };
-
-  const fetchSessionMessages = async (sessionId: string) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/chat/sessions/${sessionId}`);
-      setMessages(response.data.messages);
-    } catch (error) {
-      console.error('Error fetching messages:', error);
-    }
-  };
-
   const createNewSession = async () => {
     try {
       const response = await axios.post(`${API_BASE_URL}/chat/sessions`, {
         title: `New Chat ${sessions.length + 1}`,
-        cli_id: selectedCliId || null
+        cli_id: selectedCliId || null,
+        path: path
       });
       setSessions([response.data, ...sessions]);
       setCurrentSessionId(response.data.id);
       setMessages([]);
     } catch (error) {
       console.error('Error creating session:', error);
+    }
+  };
+
+  const deleteSession = async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    try {
+      await axios.delete(`${API_BASE_URL}/chat/sessions/${sessionId}`);
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      if (currentSessionId === sessionId) {
+        setCurrentSessionId(null);
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Error deleting session:', error);
     }
   };
 
@@ -212,6 +249,19 @@ function App() {
             </div>
           </div>
 
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+              Working Directory
+            </label>
+            <input 
+              type="text" 
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              placeholder="/home/niceiyke"
+              className="w-full bg-secondary/50 border border-border text-foreground text-sm rounded-lg focus:ring-primary focus:border-primary block p-2 transition-all outline-none"
+            />
+          </div>
+
           <button 
             onClick={createNewSession}
             className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white py-2.5 rounded-lg transition-all duration-200 text-sm font-medium shadow-lg shadow-primary/10"
@@ -225,27 +275,40 @@ function App() {
           <div className="px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             History
           </div>
-          {sessions.map((session) => (
+          {filteredSessions.map((session) => (
             <button
               key={session.id}
-              onClick={() => setCurrentSessionId(session.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group ${
+              onClick={() => {
+                setCurrentSessionId(session.id);
+                setPath(session.path);
+              }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group relative ${
                 currentSessionId === session.id 
                   ? 'bg-primary/10 text-primary border-primary/20 border' 
                   : 'hover:bg-muted text-muted-foreground hover:text-foreground'
               }`}
             >
-              <MessageSquare className={`w-4 h-4 ${currentSessionId === session.id ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`} />
-              <span className="truncate text-left">{session.title || 'Untitled Chat'}</span>
+              <MessageSquare className={`w-4 h-4 flex-shrink-0 ${currentSessionId === session.id ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`} />
+              <span className="truncate text-left pr-6">{session.title || 'Untitled Chat'}</span>
+              <button
+                onClick={(e) => deleteSession(e, session.id)}
+                className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-all"
+                title="Delete Chat"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </button>
           ))}
         </div>
 
         <div className="p-4 border-t border-border mt-auto">
-          <div className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground cursor-pointer transition-colors">
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground cursor-pointer transition-colors hover:bg-muted rounded-lg"
+          >
             <Settings className="w-4 h-4" />
             <span className="text-sm">Settings</span>
-          </div>
+          </button>
         </div>
       </motion.div>
 
@@ -267,12 +330,18 @@ function App() {
             </h2>
           </div>
           <div className="flex items-center gap-4">
-            <div className="bg-secondary p-2 rounded-full cursor-pointer hover:bg-muted transition-colors">
+            <button 
+              onClick={() => setIsSearchOpen(true)}
+              className="bg-secondary p-2 rounded-full cursor-pointer hover:bg-muted transition-colors"
+            >
               <Search className="w-4 h-4 text-muted-foreground" />
-            </div>
-            <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center border border-primary/30">
+            </button>
+            <button 
+              onClick={() => setIsProfileOpen(true)}
+              className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center border border-primary/30 cursor-pointer hover:bg-primary/30 transition-colors"
+            >
               <User className="w-4 h-4 text-primary" />
-            </div>
+            </button>
           </div>
         </header>
 
@@ -433,6 +502,132 @@ function App() {
                 </button>
               </div>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+          >
+            <div className="p-6 border-b border-border flex items-center justify-between bg-muted/30">
+              <h3 className="text-xl font-bold">Settings</h3>
+              <button 
+                onClick={() => setIsSettingsOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Dark Mode</span>
+                <div className="w-10 h-6 bg-primary rounded-full relative cursor-pointer">
+                  <div className="absolute right-1 top-1 w-4 h-4 bg-white rounded-full shadow-sm" />
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Notifications</span>
+                <div className="w-10 h-6 bg-secondary rounded-full relative cursor-pointer">
+                  <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow-sm" />
+                </div>
+              </div>
+              <div className="pt-4 border-t border-border">
+                <p className="text-xs text-muted-foreground">Version 1.0.0</p>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Search Modal */}
+      {isSearchOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+          >
+            <div className="p-6 border-b border-border flex items-center justify-between bg-muted/30">
+              <h3 className="text-xl font-bold">Search Conversations</h3>
+              <button 
+                onClick={() => setIsSearchOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-4 border-b border-border">
+              <input 
+                autoFocus
+                type="text" 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search..."
+                className="w-full bg-secondary/50 border border-border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {filteredSessions.length > 0 ? (
+                filteredSessions.map(session => (
+                  <button
+                    key={session.id}
+                    onClick={() => {
+                      setCurrentSessionId(session.id);
+                      setIsSearchOpen(false);
+                    }}
+                    className="w-full text-left p-3 hover:bg-secondary rounded-lg transition-colors flex items-center gap-3"
+                  >
+                    <MessageSquare className="w-4 h-4 text-muted-foreground" />
+                    <span className="truncate">{session.title || 'Untitled Chat'}</span>
+                  </button>
+                ))
+              ) : (
+                <div className="p-8 text-center text-muted-foreground">
+                  No conversations found
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Profile Modal */}
+      {isProfileOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+          >
+            <div className="p-6 border-b border-border flex items-center justify-between bg-muted/30">
+              <h3 className="text-xl font-bold">User Profile</h3>
+              <button 
+                onClick={() => setIsProfileOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6 text-center">
+              <div className="w-20 h-20 bg-primary/20 rounded-full mx-auto flex items-center justify-center border-2 border-primary/30">
+                <User className="w-10 h-10 text-primary" />
+              </div>
+              <div>
+                <h4 className="text-lg font-bold">Code-CLI User</h4>
+                <p className="text-muted-foreground">user@example.com</p>
+              </div>
+              <button 
+                className="w-full py-2.5 bg-secondary hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 border border-transparent rounded-xl transition-all font-medium"
+                onClick={() => setIsProfileOpen(false)}
+              >
+                Log Out
+              </button>
+            </div>
           </motion.div>
         </div>
       )}

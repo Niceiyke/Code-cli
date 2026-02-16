@@ -34,6 +34,8 @@ class CLI(CLIBase):
 class SessionBase(BaseModel):
     title: Optional[str] = None
     cli_id: Optional[UUID] = None
+    path: str = "/home/niceiyke"
+    external_session_id: Optional[str] = None
 
 class SessionCreate(SessionBase):
     pass
