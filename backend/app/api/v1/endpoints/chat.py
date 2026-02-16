@@ -197,6 +197,24 @@ async def n8n_callback(message_id: UUID, request: Request, db: AsyncSession = De
     await db.commit()
     return {"status": "success"}
 
+@router.patch("/sessions/{session_id}", response_model=Session)
+async def update_session(session_id: UUID, session_in: SessionCreate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ChatSession).filter(ChatSession.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session_in.title:
+        session.title = session_in.title
+    if session_in.cli_id:
+        session.cli_id = session_in.cli_id
+    if session_in.path:
+        session.path = session_in.path
+        
+    await db.commit()
+    await db.refresh(session)
+    return session
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ChatSession).filter(ChatSession.id == session_id))
