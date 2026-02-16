@@ -4,39 +4,41 @@
 
 @layer base {
   :root {
-    --background: #ffffff;
-    --foreground: #020617;
-    --card: #f8fafc;
-    --card-foreground: #020617;
-    --primary: #3b82f6;
-    --primary-foreground: #ffffff;
-    --secondary: #f1f5f9;
-    --secondary-foreground: #0f172a;
-    --accent: #0ea5e9;
-    --accent-foreground: #ffffff;
-    --muted: #f1f5f9;
-    --muted-foreground: #64748b;
-    --border: #e2e8f0;
-    --input: #e2e8f0;
-    --ring: #3b82f6;
+    --background: 255 255 255;
+    --foreground: 2 6 23;
+    --card: 248 250 252;
+    --card-foreground: 2 6 23;
+    --primary: 59 130 246;
+    --primary-foreground: 255 255 255;
+    --secondary: 241 245 249;
+    --secondary-foreground: 15 23 42;
+    --accent: 14 165 233;
+    --accent-foreground: 255 255 255;
+    --muted: 241 245 249;
+    --muted-foreground: 100 116 139;
+    --border: 226 232 240;
+    --input: 226 232 240;
+    --ring: 59 130 246;
+    color-scheme: light;
   }
 
   .dark {
-    --background: #020617;
-    --foreground: #f8fafc;
-    --card: #0f172a;
-    --card-foreground: #f8fafc;
-    --primary: #3b82f6;
-    --primary-foreground: #ffffff;
-    --secondary: #1e293b;
-    --secondary-foreground: #f8fafc;
-    --accent: #0ea5e9;
-    --accent-foreground: #ffffff;
-    --muted: #1e293b;
-    --muted-foreground: #94a3b8;
-    --border: #1e293b;
-    --input: #1e293b;
-    --ring: #3b82f6;
+    --background: 2 6 23;
+    --foreground: 248 250 252;
+    --card: 15 23 42;
+    --card-foreground: 248 250 252;
+    --primary: 59 130 246;
+    --primary-foreground: 255 255 255;
+    --secondary: 30 41 59;
+    --secondary-foreground: 248 250 252;
+    --accent: 14 165 233;
+    --accent-foreground: 255 255 255;
+    --muted: 30 41 59;
+    --muted-foreground: 148 163 184;
+    --border: 30 41 59;
+    --input: 30 41 59;
+    --ring: 59 130 246;
+    color-scheme: dark;
   }
 }
 
@@ -55,8 +57,8 @@ body {
   display: flex;
   min-width: 320px;
   min-height: 100vh;
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: rgb(var(--background));
+  color: rgb(var(--foreground));
 }
 
 #root {
@@ -64,15 +66,20 @@ body {
 }
 
 .glass {
-  background: rgba(21, 23, 30, 0.4);
+  background: rgba(var(--card) / 0.4);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(var(--foreground) / 0.05);
 }
 
 .dark .glass {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(var(--card) / 0.7);
+  border: 1px solid rgba(var(--foreground) / 0.1);
+}
+
+select option {
+  background-color: rgb(var(--card));
+  color: rgb(var(--foreground));
 }
 
 .fintech-gradient {

@@ -223,7 +223,7 @@ function App() {
       };
       setMessages(prev => [...prev, optimisticMsg]);
 
-      const response = await axios.post(`${API_BASE_URL}/chat/sessions/${currentSessionId}/messages`, {
+      await axios.post(`${API_BASE_URL}/chat/sessions/${currentSessionId}/messages`, {
         role: 'user',
         content: userMessage
       });
