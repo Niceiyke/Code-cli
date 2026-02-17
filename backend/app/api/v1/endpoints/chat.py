@@ -76,9 +76,14 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Determine if we should resume
+    # is_resume is true ONLY if there is at least one previous successful AI response
     count_result = await db.execute(
         select(func.count(ChatMessage.id))
-        .filter(ChatMessage.session_id == session_id, ChatMessage.role == "ai")
+        .filter(
+            ChatMessage.session_id == session_id, 
+            ChatMessage.role == "ai",
+            ChatMessage.content != "Thinking..."
+        )
     )
     ai_msg_count = count_result.scalar()
     is_resume = ai_msg_count > 0
