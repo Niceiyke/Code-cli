@@ -39,7 +39,7 @@ Code-CLI is a modern, AI-powered web interface designed to interact with various
 ### 1. Environment Configuration
 Create a `.env` file in the root directory and add the following:
 ```env
-N8N_WEBHOOK_URL=your_n8n_webhook_url
+N8N_WEBHOOK_URL=https://n8n.wordlyte.com/webhook/code-cli-webhook
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 POSTGRES_DB=code_cli
