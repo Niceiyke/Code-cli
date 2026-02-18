@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from app.db.session import get_db
-from app.models.chat import ChatSession, ChatMessage, CLI
+from app.models.chat import ChatSession, ChatMessage, CLI, Attachment
 from app.schemas.chat import MessageCreate, Session, SessionWithMessages, SessionCreate, Message
 import httpx
 import os
@@ -40,9 +40,10 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Fetch messages separately
+    # Fetch messages separately with attachments
     messages_result = await db.execute(
         select(ChatMessage)
+        .options(selectinload(ChatMessage.attachments))
         .filter(ChatMessage.session_id == session_id)
         .order_by(ChatMessage.created_at.asc())
     )
@@ -60,7 +61,16 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
                 "id": m.id,
                 "role": m.role,
                 "content": m.content,
-                "created_at": m.created_at
+                "created_at": m.created_at,
+                "attachments": [
+                    {
+                        "id": a.id,
+                        "file_name": a.file_name,
+                        "mime_type": a.mime_type,
+                        "data": a.data,
+                        "created_at": a.created_at
+                    } for a in m.attachments
+                ]
             } for m in messages
         ]
     }
@@ -97,6 +107,22 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
 
     # 1. Save user message
     user_msg = ChatMessage(session_id=session_id, role="user", content=message_in.content)
+    
+    attachments_payload = []
+    if message_in.attachments:
+        for att in message_in.attachments:
+            attachment = Attachment(
+                file_name=att.file_name,
+                mime_type=att.mime_type,
+                data=att.data
+            )
+            user_msg.attachments.append(attachment)
+            attachments_payload.append({
+                "file_name": att.file_name,
+                "mime_type": att.mime_type,
+                "data": att.data
+            })
+
     db.add(user_msg)
     
     # 2. Create placeholder AI message
@@ -117,7 +143,8 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
                         "prompt": message_in.content,
                         "is_resume": is_resume,
                         "path": session.path,
-                        "callback_url": f"https://api-code-cli.wordlyte.com/api/v1/chat/callback/{ai_msg.id}"
+                        "callback_url": f"https://api-code-cli.wordlyte.com/api/v1/chat/callback/{ai_msg.id}",
+                        "attachments": attachments_payload
                     }
                     # Send back the external session ID using the key n8n expects/provides
                     if session.external_session_id:

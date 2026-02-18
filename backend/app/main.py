@@ -10,7 +10,7 @@ app = FastAPI(title="Code-CLI API")
 async def startup():
     async with engine.begin() as conn:
         # Import models to ensure they are registered with Base
-        from app.models.chat import ChatSession, ChatMessage, CLI
+        from app.models.chat import ChatSession, ChatMessage, CLI, Attachment
         await conn.run_sync(Base.metadata.create_all)
 
 app.add_middleware(

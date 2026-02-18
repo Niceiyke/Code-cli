@@ -14,7 +14,10 @@ import {
   Trash2,
   Check,
   Copy,
-  Loader2
+  Loader2,
+  Paperclip,
+  FileText,
+  Image as ImageIcon
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -27,11 +30,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '');
 
 // Types
+interface Attachment {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  data: string;
+  created_at: string;
+}
+
 interface Message {
   id: string;
   role: 'user' | 'ai';
   content: string;
   created_at: string;
+  attachments?: Attachment[];
 }
 
 interface Session {
@@ -77,6 +89,7 @@ function App() {
   const [searchQuery, _setSearchQuery] = useState('');
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
+  const [attachments, setAttachments] = useState<{file_name: string, mime_type: string, data: string}[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved) return saved === 'dark';
@@ -85,6 +98,39 @@ function App() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newAttachments = [...attachments];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const reader = new FileReader();
+      
+      const filePromise = new Promise<{file_name: string, mime_type: string, data: string}>((resolve) => {
+        reader.onload = (event) => {
+          const base64String = event.target?.result as string;
+          const base64Data = base64String.split(',')[1];
+          resolve({
+            file_name: file.name,
+            mime_type: file.type,
+            data: base64Data
+          });
+        };
+      });
+      
+      reader.readAsDataURL(file);
+      newAttachments.push(await filePromise);
+    }
+    setAttachments(newAttachments);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments(attachments.filter((_, i) => i !== index));
+  };
 
   // Persistence Effects
   useEffect(() => {
@@ -156,10 +202,11 @@ function App() {
   });
 
   const sendMessageMutation = useMutation({
-    mutationFn: async ({ sessionId, content }: { sessionId: string; content: string }) => {
+    mutationFn: async ({ sessionId, content, attachments }: { sessionId: string; content: string, attachments?: any[] }) => {
       return (await axios.post(`${API_BASE_URL}/chat/sessions/${sessionId}/messages`, {
         role: 'user',
-        content: content
+        content: content,
+        attachments: attachments
       })).data;
     },
     onSuccess: () => {
@@ -197,16 +244,21 @@ function App() {
   // Handlers
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!input.trim() || sendMessageMutation.isPending || createSessionMutation.isPending) return;
+    if (!input.trim() && attachments.length === 0) return;
+    if (sendMessageMutation.isPending || createSessionMutation.isPending) return;
 
     const content = input;
+    const currentAttachments = [...attachments];
     setInput('');
+    setAttachments([]);
 
     let sessionId: string;
     
     // Lazy session creation
     if (!currentSessionId || currentSessionId === 'new') {
-      const derivedTitle = content.length > 40 ? content.substring(0, 40) + '...' : content;
+      const derivedTitle = content 
+        ? (content.length > 40 ? content.substring(0, 40) + '...' : content)
+        : 'New Conversation with Files';
       const newSession = await createSessionMutation.mutateAsync(derivedTitle);
       sessionId = newSession.id;
       setCurrentSessionId(sessionId);
@@ -214,7 +266,7 @@ function App() {
       sessionId = currentSessionId;
     }
 
-    sendMessageMutation.mutate({ sessionId, content });
+    sendMessageMutation.mutate({ sessionId, content, attachments: currentAttachments });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -425,6 +477,18 @@ function App() {
                         ? 'bg-primary text-white' 
                         : 'bg-card border border-border'
                     }`}>
+                      {message.attachments && message.attachments.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {message.attachments.map((att) => (
+                            <div key={att.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs ${
+                              message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
+                            }`}>
+                              {att.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                              <span className="max-w-[150px] truncate">{att.file_name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -482,25 +546,65 @@ function App() {
 
         {/* Input Area */}
         <div className="p-4 md:p-6 border-t border-border glass">
-          <div className="max-w-4xl mx-auto relative flex items-end gap-2">
-            <div className="relative flex-1">
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Message Code-CLI..."
-                className="w-full bg-secondary/50 border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none py-3 px-4 md:py-4 md:px-6 rounded-2xl transition-all placeholder:text-muted-foreground resize-none min-h-[48px] max-h-[200px]"
+          <div className="max-w-4xl mx-auto space-y-4">
+            {/* Attachment Preview */}
+            <AnimatePresence>
+              {attachments.length > 0 && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="flex flex-wrap gap-2 pb-2"
+                >
+                  {attachments.map((file, index) => (
+                    <div key={index} className="flex items-center gap-2 bg-secondary/80 border border-border px-3 py-1.5 rounded-xl text-xs group relative">
+                      {file.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                      <span className="max-w-[120px] truncate">{file.file_name}</span>
+                      <button 
+                        onClick={() => removeAttachment(index)}
+                        className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded-full transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="relative flex items-end gap-2">
+              <input 
+                type="file" 
+                multiple 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                className="hidden" 
               />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-secondary text-muted-foreground rounded-xl flex items-center justify-center hover:bg-muted transition-all flex-shrink-0"
+              >
+                <Paperclip className="w-5 h-5" />
+              </button>
+              <div className="relative flex-1">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Message Code-CLI..."
+                  className="w-full bg-secondary/50 border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none py-3 px-4 md:py-4 md:px-6 rounded-2xl transition-all placeholder:text-muted-foreground resize-none min-h-[48px] max-h-[200px]"
+                />
+              </div>
+              <button
+                onClick={() => handleSendMessage()}
+                disabled={(!input.trim() && attachments.length === 0) || sendMessageMutation.isPending || createSessionMutation.isPending}
+                className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-primary text-white rounded-xl flex items-center justify-center hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground transition-all shadow-lg shadow-primary/10 flex-shrink-0"
+              >
+                {sendMessageMutation.isPending || createSessionMutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+              </button>
             </div>
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={!input.trim() || sendMessageMutation.isPending || createSessionMutation.isPending}
-              className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-primary text-white rounded-xl flex items-center justify-center hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground transition-all shadow-lg shadow-primary/10 flex-shrink-0"
-            >
-              {sendMessageMutation.isPending || createSessionMutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-            </button>
           </div>
           <p className="text-[10px] text-muted-foreground text-center mt-3 uppercase tracking-widest font-semibold opacity-50">
             Powered by n8n & Gemini

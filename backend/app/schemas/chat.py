@@ -7,12 +7,29 @@ class MessageBase(BaseModel):
     role: str
     content: str
 
-class MessageCreate(MessageBase):
+class AttachmentBase(BaseModel):
+    file_name: str
+    mime_type: str
+    data: str  # Base64 string
+
+class AttachmentCreate(AttachmentBase):
     pass
+
+class Attachment(AttachmentBase):
+    id: UUID
+    message_id: UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class MessageCreate(MessageBase):
+    attachments: Optional[List[AttachmentCreate]] = None
 
 class Message(MessageBase):
     id: UUID
     created_at: datetime
+    attachments: Optional[List[Attachment]] = []
 
     class Config:
         from_attributes = True

@@ -38,3 +38,16 @@ class ChatMessage(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ChatSession", back_populates="messages")
+    attachments = relationship("Attachment", back_populates="message", cascade="all, delete-orphan")
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id = Column(UUID(as_uuid=True), ForeignKey("chat_messages.id"), nullable=False)
+    file_name = Column(String, nullable=False)
+    mime_type = Column(String, nullable=False)
+    data = Column(Text, nullable=False)  # Base64 string
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    message = relationship("ChatMessage", back_populates="attachments")
