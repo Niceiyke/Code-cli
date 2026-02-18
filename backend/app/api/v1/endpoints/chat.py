@@ -126,11 +126,11 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
     db.add(user_msg)
     
     # 2. Create placeholder AI message
-    ai_msg = ChatMessage(session_id=session_id, role="ai", content="Thinking...")
+    ai_msg = ChatMessage(session_id=session_id, role="ai", content="Thinking...", attachments=[])
     db.add(ai_msg)
     
     await db.commit()
-    await db.refresh(ai_msg)
+    await db.refresh(ai_msg, ["attachments"])
 
     # 3. Fire-and-forget to n8n (with a short timeout for the trigger itself)
     if N8N_WEBHOOK_URL:
@@ -151,7 +151,8 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
                         payload["session-id"] = session.external_session_id
                         payload["external_session_id"] = session.external_session_id
                     
-                    print(f"Triggering n8n with payload: {payload}")
+                    print(f"Triggering n8n with payload keys: {list(payload.keys())}")
+                    print(f"Number of attachments: {len(payload.get('attachments', []))}")
                     await client.post(N8N_WEBHOOK_URL, json=payload)
                 except Exception as e:
                     print(f"Error triggering n8n: {e}")
