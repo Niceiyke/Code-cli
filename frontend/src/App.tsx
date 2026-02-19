@@ -17,7 +17,8 @@ import {
   Loader2,
   Paperclip,
   FileText,
-  Image as ImageIcon
+  ImageIcon,
+  Eye
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -180,8 +181,13 @@ function App() {
     },
     enabled: !!currentSessionId && currentSessionId !== 'new',
     refetchInterval: (query: any) => {
-      const messages = query.state.data?.messages || [];
-      return messages.some((m: Message) => m.content === 'Thinking...' && m.role === 'ai') ? 2000 : false;
+      const data = query.state.data;
+      const messages = data?.messages || [];
+      const hasThinking = messages.some((m: Message) => m.content === 'Thinking...' && m.role === 'ai');
+      // Continue polling if thinking OR if it's a brand new session with no messages yet
+      // but we expect one (using a timestamp or isPending check)
+      const isNewSession = !data?.id || messages.length === 0;
+      return (hasThinking || isNewSession) ? 2000 : false;
     },
   });
 
@@ -209,8 +215,37 @@ function App() {
         attachments: attachments
       })).data;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['messages', currentSessionId] });
+    onMutate: async (newMessage) => {
+      await queryClient.cancelQueries({ queryKey: ['messages', newMessage.sessionId] });
+      const previousMessages = queryClient.getQueryData(['messages', newMessage.sessionId]);
+      
+      queryClient.setQueryData(['messages', newMessage.sessionId], (old: any) => ({
+        ...old,
+        messages: [
+          ...(old?.messages || []),
+          {
+            id: 'optimistic-' + Date.now(),
+            role: 'user',
+            content: newMessage.content,
+            created_at: new Date().toISOString(),
+            // Don't include the large base64 data in the state!
+            attachments: newMessage.attachments?.map((a: any, i: number) => ({ 
+              id: 'opt-att-' + i,
+              file_name: a.file_name,
+              mime_type: a.mime_type,
+              created_at: new Date().toISOString()
+            }))
+          }
+        ]
+      }));
+
+      return { previousMessages };
+    },
+    onError: (_err, newMessage, context) => {
+      queryClient.setQueryData(['messages', newMessage.sessionId], context?.previousMessages);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['messages', variables.sessionId] });
     }
   });
 
@@ -480,11 +515,22 @@ function App() {
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="flex flex-wrap gap-2 mb-3">
                           {message.attachments.map((att) => (
-                            <div key={att.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs ${
+                            <div key={att.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs group/att ${
                               message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
                             }`}>
                               {att.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
                               <span className="max-w-[150px] truncate">{att.file_name}</span>
+                              {att.id.startsWith('opt-att-') ? null : (
+                                <a 
+                                  href={`${API_BASE_URL}/chat/attachments/${att.id}`} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="ml-1 opacity-0 group-hover/att:opacity-100 transition-opacity hover:text-primary"
+                                  title="View Attachment"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </a>
+                              )}
                             </div>
                           ))}
                         </div>

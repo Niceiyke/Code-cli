@@ -23,13 +23,22 @@ class Attachment(AttachmentBase):
     class Config:
         from_attributes = True
 
+class AttachmentMinimal(BaseModel):
+    id: UUID
+    file_name: str
+    mime_type: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class MessageCreate(MessageBase):
     attachments: Optional[List[AttachmentCreate]] = None
 
 class Message(MessageBase):
     id: UUID
     created_at: datetime
-    attachments: Optional[List[Attachment]] = []
+    attachments: Optional[List[AttachmentMinimal]] = []
 
     class Config:
         from_attributes = True

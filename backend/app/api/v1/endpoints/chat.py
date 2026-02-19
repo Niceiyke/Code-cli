@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -7,6 +7,7 @@ from app.models.chat import ChatSession, ChatMessage, CLI, Attachment
 from app.schemas.chat import MessageCreate, Session, SessionWithMessages, SessionCreate, Message
 import httpx
 import os
+import base64
 from uuid import UUID
 from datetime import datetime
 from typing import List
@@ -67,7 +68,6 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
                         "id": a.id,
                         "file_name": a.file_name,
                         "mime_type": a.mime_type,
-                        "data": a.data,
                         "created_at": a.created_at
                     } for a in m.attachments
                 ]
@@ -229,6 +229,19 @@ async def n8n_callback(message_id: UUID, request: Request, db: AsyncSession = De
 
     await db.commit()
     return {"status": "success"}
+
+@router.get("/attachments/{attachment_id}")
+async def get_attachment(attachment_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Attachment).filter(Attachment.id == attachment_id))
+    attachment = result.scalar_one_or_none()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    
+    try:
+        binary_data = base64.b64decode(attachment.data)
+        return Response(content=binary_data, media_type=attachment.mime_type)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to decode attachment: {str(e)}")
 
 @router.patch("/sessions/{session_id}", response_model=Session)
 async def update_session(session_id: UUID, session_in: SessionCreate, db: AsyncSession = Depends(get_db)):
