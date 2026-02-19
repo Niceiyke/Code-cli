@@ -7,6 +7,7 @@ import {
   Bot, 
   ChevronLeft, 
   ChevronRight,
+  ChevronDown,
   Settings,
   LayoutDashboard,
   Search,
@@ -86,8 +87,8 @@ function App() {
   const [isAddCliModalOpen, setIsAddCliModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [_isProfileOpen, setIsProfileOpen] = useState(false);
-  const [_isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, _setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
   const [attachments, setAttachments] = useState<{file_name: string, mime_type: string, data: string}[]>([]);
@@ -100,6 +101,17 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsSearchOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -305,7 +317,7 @@ function App() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
       e.preventDefault();
       handleSendMessage();
     }
@@ -454,9 +466,16 @@ function App() {
         {/* Header */}
         <header className="h-16 border-b border-border flex items-center justify-between px-4 md:px-6 glass">
           <div className="flex items-center gap-4 ml-8 md:ml-0 overflow-hidden">
-            <h2 className="font-semibold text-base md:text-lg truncate max-w-[200px] md:max-w-md">
-              {activeSessionTitle}
-            </h2>
+            <button 
+              onClick={() => setIsSearchOpen(true)}
+              className="group flex items-center gap-2 hover:bg-muted/50 px-2.5 py-1.5 rounded-xl transition-all overflow-hidden"
+              title="Switch Conversation (Ctrl+K)"
+            >
+              <h2 className="font-semibold text-base md:text-lg truncate max-w-[150px] sm:max-w-[250px] md:max-w-md">
+                {activeSessionTitle}
+              </h2>
+              <ChevronDown className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+            </button>
           </div>
           <div className="flex items-center gap-2 md:gap-4">
             <button onClick={() => setIsSearchOpen(true)} className="bg-secondary p-2 rounded-full hover:bg-muted transition-colors"><Search className="w-4 h-4 text-muted-foreground" /></button>
@@ -660,6 +679,59 @@ function App() {
 
       {/* Modals */}
       <AnimatePresence>
+        {isSearchOpen && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-start justify-center z-[100] p-4 pt-[10vh]">
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              exit={{ opacity: 0, y: -20 }} 
+              className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden"
+            >
+              <div className="p-4 border-b border-border flex items-center gap-3 bg-muted/30">
+                <Search className="w-5 h-5 text-muted-foreground" />
+                <input 
+                  autoFocus 
+                  type="text" 
+                  value={searchQuery} 
+                  onChange={(e) => setSearchQuery(e.target.value)} 
+                  placeholder="Search conversations..." 
+                  className="flex-1 bg-transparent border-none outline-none text-lg" 
+                />
+                <button onClick={() => setIsSearchOpen(false)} className="text-muted-foreground hover:text-foreground">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="max-h-[60vh] overflow-y-auto p-2">
+                {filteredSessions.length > 0 ? (
+                  filteredSessions.map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => {
+                        setCurrentSessionId(session.id);
+                        setPath(session.path);
+                        setIsSearchOpen(false);
+                        setSearchQuery('');
+                        if (window.innerWidth < 768) setIsSidebarOpen(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm hover:bg-muted transition-all group"
+                    >
+                      <MessageSquare className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                      <div className="flex flex-col items-start overflow-hidden text-left">
+                        <span className="font-medium truncate w-full">{session.title || 'Untitled Chat'}</span>
+                        <span className="text-xs text-muted-foreground truncate w-full">{session.path}</span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-8 text-center text-muted-foreground">
+                    No conversations found matching "{searchQuery}"
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {isAddCliModalOpen && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
