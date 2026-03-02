@@ -136,6 +136,7 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
     session.updated_at = datetime.utcnow()
     
     attachments_payload = []
+    has_voice_note = False
     if message_in.attachments:
         for att in message_in.attachments:
             attachment = Attachment(
@@ -149,6 +150,8 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
                 "mime_type": att.mime_type,
                 "data": att.data
             })
+            if att.mime_type.startswith("audio/"):
+                has_voice_note = True
 
     db.add(user_msg)
     
@@ -169,6 +172,7 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
                         "session_id": str(session_id),
                         "prompt": message_in.content,
                         "is_resume": is_resume,
+                        "has_voice_note": has_voice_note,
                         "path": session.path,
                         "callback_url": f"https://api-code-cli.wordlyte.com/api/v1/chat/callback/{ai_msg.id}",
                         "attachments": attachments_payload

@@ -23,7 +23,9 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Download
+  Download,
+  Mic,
+  Square
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -445,6 +447,77 @@ function App() {
 
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        
+        const audioPromise = new Promise<{file_name: string, mime_type: string, data: string}>((resolve) => {
+          reader.onload = (event) => {
+            const base64String = event.target?.result as string;
+            const base64Data = base64String.split(',')[1];
+            resolve({
+              file_name: `Voice_Note_${new Date().toISOString()}.webm`,
+              mime_type: 'audio/webm',
+              data: base64Data
+            });
+          };
+        });
+        
+        reader.readAsDataURL(audioBlob);
+        const voiceNote = await audioPromise;
+        setAttachments(prev => [...prev, voiceNote]);
+        
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = window.setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Error accessing microphone:", err);
+      alert("Could not access microphone. Please check your permissions.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const updateMessageMutation = useMutation({
     mutationFn: async ({ messageId, content }: { messageId: string; content: string }) => {
@@ -769,7 +842,7 @@ function App() {
                                   <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs group/att ${
                                     message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
                                   }`}>
-                                    <FileText className="w-3.5 h-3.5" />
+                                    {att.mime_type.startsWith('audio/') ? <Mic className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
                                     <span className="max-w-[150px] truncate">{att.file_name}</span>
                                     {att.id.startsWith('opt-att-') ? null : (
                                       <a 
@@ -915,30 +988,55 @@ function App() {
                 onChange={handleFileChange} 
                 className="hidden" 
               />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-secondary text-muted-foreground rounded-xl flex items-center justify-center hover:bg-muted transition-all flex-shrink-0"
-              >
-                <Paperclip className="w-5 h-5" />
-              </button>
-              <div className="relative flex-1">
-                <textarea
-                  ref={textareaRef}
-                  rows={1}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Message Code-CLI..."
-                  className="w-full bg-secondary/50 border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none py-3 px-4 md:py-4 md:px-6 rounded-2xl transition-all placeholder:text-muted-foreground resize-none min-h-[48px] max-h-[200px]"
-                />
-              </div>
-              <button
-                onClick={() => handleSendMessage()}
-                disabled={(!input.trim() && attachments.length === 0) || sendMessageMutation.isPending || createSessionMutation.isPending}
-                className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-primary text-white rounded-xl flex items-center justify-center hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground transition-all shadow-lg shadow-primary/10 flex-shrink-0"
-              >
-                {sendMessageMutation.isPending || createSessionMutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-              </button>
+              
+              {isRecording ? (
+                <div className="flex-1 flex items-center gap-4 bg-red-500/10 border border-red-500/30 px-4 py-2 rounded-2xl animate-pulse">
+                  <div className="w-3 h-3 bg-red-500 rounded-full animate-ping" />
+                  <span className="text-sm font-medium text-red-500 flex-1">Recording Voice Note... {formatTime(recordingTime)}</span>
+                  <button
+                    onClick={stopRecording}
+                    className="w-10 h-10 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
+                    title="Stop Recording"
+                  >
+                    <Square className="w-5 h-5 fill-current" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-secondary text-muted-foreground rounded-xl flex items-center justify-center hover:bg-muted transition-all flex-shrink-0"
+                  >
+                    <Paperclip className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={startRecording}
+                    className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-secondary text-muted-foreground rounded-xl flex items-center justify-center hover:bg-muted transition-all flex-shrink-0"
+                    title="Record Voice Note"
+                  >
+                    <Mic className="w-5 h-5" />
+                  </button>
+                  <div className="relative flex-1">
+                    <textarea
+                      ref={textareaRef}
+                      rows={1}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      onPaste={handlePaste}
+                      placeholder="Message Code-CLI..."
+                      className="w-full bg-secondary/50 border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none py-3 px-4 md:py-4 md:px-6 rounded-2xl transition-all placeholder:text-muted-foreground resize-none min-h-[48px] max-h-[200px]"
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleSendMessage()}
+                    disabled={(!input.trim() && attachments.length === 0) || sendMessageMutation.isPending || createSessionMutation.isPending}
+                    className="mb-1 w-10 h-10 md:w-12 md:h-12 bg-primary text-white rounded-xl flex items-center justify-center hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground transition-all shadow-lg shadow-primary/10 flex-shrink-0"
+                  >
+                    {sendMessageMutation.isPending || createSessionMutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                  </button>
+                </>
+              )}
             </div>
           </div>
           <p className="text-[10px] text-muted-foreground text-center mt-3 uppercase tracking-widest font-semibold opacity-50">
