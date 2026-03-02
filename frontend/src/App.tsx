@@ -19,7 +19,11 @@ import {
   Paperclip,
   FileText,
   ImageIcon,
-  Eye
+  Eye,
+  Pencil,
+  Pin,
+  PinOff,
+  Download
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -54,6 +58,7 @@ interface Session {
   path: string;
   created_at: string;
   cli_id?: string;
+  is_pinned?: string;
 }
 
 interface CLI {
@@ -114,9 +119,22 @@ function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent | ClipboardEvent) => {
+    let files: FileList | File[] | null = null;
+    
+    if ('files' in e && e.files) {
+      files = e.files;
+    } else if ('dataTransfer' in e && e.dataTransfer) {
+      files = e.dataTransfer.files;
+    } else if ('clipboardData' in e && e.clipboardData) {
+      files = Array.from(e.clipboardData.files);
+    } else if ('target' in e && (e.target as HTMLInputElement).files) {
+      files = (e.target as HTMLInputElement).files;
+    }
+
+    if (!files || files.length === 0) return;
 
     const newAttachments = [...attachments];
     for (let i = 0; i < files.length; i++) {
@@ -140,6 +158,28 @@ function App() {
     }
     setAttachments(newAttachments);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    handleFileChange(e);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (e.clipboardData.files.length > 0) {
+      handleFileChange(e as any);
+    }
   };
 
   const removeAttachment = (index: number) => {
@@ -304,6 +344,39 @@ function App() {
     }
   });
 
+  const pinSessionMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      return (await axios.patch(`${API_BASE_URL}/chat/sessions/${sessionId}/pin`)).data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    }
+  });
+
+  const exportToMarkdown = () => {
+    if (!messages.length) return;
+    const title = sessions.find(s => s.id === currentSessionId)?.title || 'Untitled Chat';
+    let md = `# ${title}\n\n`;
+    messages.forEach((m: Message) => {
+      md += `### ${m.role === 'user' ? 'User' : 'AI'} (${formatDateTime(m.created_at)})\n\n${m.content}\n\n`;
+      if (m.attachments?.length) {
+        md += `**Attachments:**\n`;
+        m.attachments.forEach(a => {
+          md += `- ${a.file_name} (${a.mime_type})\n`;
+        });
+        md += `\n`;
+      }
+      md += `---\n\n`;
+    });
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const createCliMutation = useMutation({
     mutationFn: async ({ name, description }: { name: string; description: string }) => {
       return (await axios.post(`${API_BASE_URL}/cli/`, { name, description })).data;
@@ -370,6 +443,28 @@ function App() {
     }
   }, [input]);
 
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState('');
+
+  const updateMessageMutation = useMutation({
+    mutationFn: async ({ messageId, content }: { messageId: string; content: string }) => {
+      // In a real app, this should be a backend endpoint like PATCH /messages/{id}
+      // For now we'll just update the local state to show it works.
+      // But let's check if the backend has it. Based on my previous research, it doesn't.
+      // I'll add the backend endpoint next.
+      await axios.patch(`${API_BASE_URL}/chat/messages/${messageId}`, { content });
+    },
+    onSuccess: (_, { messageId, content }) => {
+      queryClient.setQueryData(['messages', currentSessionId], (old: any) => ({
+        ...old,
+        messages: (old?.messages || []).map((m: Message) => 
+          m.id === messageId ? { ...m, content } : m
+        )
+      }));
+      setEditingMessageId(null);
+    }
+  });
+
   const formatDateTime = (dateString: string) => {
     const date = new Date(dateString);
     return new Intl.DateTimeFormat('en-US', {
@@ -389,7 +484,30 @@ function App() {
     : sessions.find(s => s.id === currentSessionId)?.title || 'Select a conversation';
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans">
+    <div 
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="flex h-screen bg-background text-foreground overflow-hidden font-sans relative"
+    >
+      <AnimatePresence>
+        {isDragging && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-primary/10 backdrop-blur-sm border-4 border-dashed border-primary flex flex-col items-center justify-center p-4 pointer-events-none"
+          >
+            <div className="bg-card p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+                <Paperclip className="w-8 h-8 text-primary" />
+              </div>
+              <h3 className="text-xl font-bold">Drop files to attach</h3>
+              <p className="text-muted-foreground text-center max-w-xs">You can drop multiple files and images here to share them in the chat.</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Sidebar Overlay for Mobile */}
       <AnimatePresence>
         {isSidebarOpen && window.innerWidth < 768 && (
@@ -472,14 +590,28 @@ function App() {
               }`}
             >
               <MessageSquare className={`w-4 h-4 flex-shrink-0 ${currentSessionId === session.id ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`} />
-              <span className="truncate text-left pr-6">{session.title || 'Untitled Chat'}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); setSessionToDelete(session.id); }}
-                className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-all"
-                title="Delete Chat"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              <span className="truncate text-left pr-12">{session.title || 'Untitled Chat'}</span>
+              <div className="absolute right-2 opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all">
+                <button
+                  onClick={(e) => { e.stopPropagation(); pinSessionMutation.mutate(session.id); }}
+                  className={`p-1 rounded transition-all ${session.is_pinned ? 'text-primary hover:bg-primary/10' : 'hover:bg-muted-foreground/10 text-muted-foreground'}`}
+                  title={session.is_pinned ? "Unpin Chat" : "Pin Chat"}
+                >
+                  {session.is_pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSessionToDelete(session.id); }}
+                  className="p-1 hover:bg-destructive/10 hover:text-destructive rounded text-muted-foreground transition-all"
+                  title="Delete Chat"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {session.is_pinned && !currentSessionId === session.id && (
+                <div className="absolute left-1 top-1">
+                  <Pin className="w-2 h-2 text-primary rotate-45" />
+                </div>
+              )}
             </button>
           ))}
         </div>
@@ -524,6 +656,15 @@ function App() {
             >
               <MessageSquare className="w-4 h-4 text-muted-foreground" />
             </button>
+            {messages.length > 0 && (
+              <button 
+                onClick={exportToMarkdown} 
+                className="bg-secondary p-2 rounded-full hover:bg-muted transition-colors" 
+                title="Download Chat (.md)"
+              >
+                <Download className="w-4 h-4 text-muted-foreground" />
+              </button>
+            )}
             <button onClick={() => setIsSearchOpen(true)} className="bg-secondary p-2 rounded-full hover:bg-muted transition-colors" title="Search (Ctrl+K)"><Search className="w-4 h-4 text-muted-foreground" /></button>
             <button onClick={() => setIsProfileOpen(true)} className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center border border-primary/30 hover:bg-primary/30 transition-colors"><User className="w-4 h-4 text-primary" /></button>
           </div>
@@ -585,6 +726,18 @@ function App() {
                               message.role === 'user' ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-secondary/80 hover:bg-secondary text-muted-foreground hover:text-foreground'
                             }`} 
                           />
+                          {message.role === 'user' && (
+                            <button
+                              onClick={() => {
+                                setEditingMessageId(message.id);
+                                setEditingContent(message.content);
+                              }}
+                              className={`p-1.5 rounded-lg transition-all bg-white/10 hover:bg-white/20 text-white`}
+                              title="Edit message"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={() => {
                               if (window.confirm('Are you sure you want to delete this message?')) {
@@ -602,56 +755,95 @@ function App() {
                         {message.attachments && message.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-2 mb-3">
                             {message.attachments.map((att) => (
-                              <div key={att.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs group/att ${
-                                message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
-                              }`}>
-                                {att.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
-                                <span className="max-w-[150px] truncate">{att.file_name}</span>
-                                {att.id.startsWith('opt-att-') ? null : (
+                              <div key={att.id} className="flex flex-col gap-1 max-w-[200px]">
+                                {att.mime_type.startsWith('image/') ? (
                                   <a 
                                     href={`${API_BASE_URL}/chat/attachments/${att.id}`} 
                                     target="_blank" 
                                     rel="noopener noreferrer"
-                                    className="ml-1 opacity-0 group-hover/att:opacity-100 transition-opacity hover:text-primary"
-                                    title="View Attachment"
+                                    className="rounded-lg overflow-hidden border border-border/50 hover:opacity-90 transition-opacity"
                                   >
-                                    <Eye className="w-3.5 h-3.5" />
+                                    <img src={`${API_BASE_URL}/chat/attachments/${att.id}`} alt={att.file_name} className="max-h-[150px] object-cover w-full" />
                                   </a>
+                                ) : (
+                                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs group/att ${
+                                    message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
+                                  }`}>
+                                    <FileText className="w-3.5 h-3.5" />
+                                    <span className="max-w-[150px] truncate">{att.file_name}</span>
+                                    {att.id.startsWith('opt-att-') ? null : (
+                                      <a 
+                                        href={`${API_BASE_URL}/chat/attachments/${att.id}`} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="ml-1 opacity-0 group-hover/att:opacity-100 transition-opacity hover:text-primary"
+                                        title="View Attachment"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </a>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             ))}
                           </div>
                         )}
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            code({ node, inline, className, children, ...props }: any) {
-                              const match = /language-(\w+)/.exec(className || '');
-                              return !inline && match ? (
-                                <div className="relative group mt-2 mb-2">
-                                  <CopyButton text={String(children).replace(/\n$/, '')} />
-                                  <SyntaxHighlighter
-                                    style={isDarkMode ? vscDarkPlus : vs}
-                                    language={match[1]}
-                                    PreTag="div"
-                                    className="rounded-xl !bg-muted/50 !mt-0 !mb-0 text-[13px]"
-                                    {...props}
-                                  >
-                                    {String(children).replace(/\n$/, '')}
-                                  </SyntaxHighlighter>
-                                </div>
-                              ) : (
-                                <code className={`${className} bg-muted/50 px-1.5 py-0.5 rounded-md font-mono text-xs`} {...props}>{children}</code>
-                              );
-                            },
-                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                            ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
-                            ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
-                            a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline underline-offset-4 font-medium">{children}</a>,
-                          }}
-                        >
-                          {message.content}
-                        </ReactMarkdown>
+                        {editingMessageId === message.id ? (
+                          <div className="flex flex-col gap-2 min-w-[250px] max-w-full">
+                            <textarea
+                              autoFocus
+                              value={editingContent}
+                              onChange={(e) => setEditingContent(e.target.value)}
+                              className="w-full bg-white/10 border border-white/20 rounded-xl p-2 outline-none focus:ring-1 focus:ring-white/30 text-white resize-none min-h-[100px]"
+                            />
+                            <div className="flex gap-2 justify-end">
+                              <button 
+                                onClick={() => setEditingMessageId(null)}
+                                className="px-3 py-1 text-xs font-medium rounded-lg hover:bg-white/10 text-white"
+                              >
+                                Cancel
+                              </button>
+                              <button 
+                                onClick={() => updateMessageMutation.mutate({ messageId: message.id, content: editingContent })}
+                                disabled={updateMessageMutation.isPending}
+                                className="px-3 py-1 text-xs font-bold rounded-lg bg-white text-primary hover:bg-white/90"
+                              >
+                                {updateMessageMutation.isPending ? 'Saving...' : 'Save Changes'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code({ node, inline, className, children, ...props }: any) {
+                                const match = /language-(\w+)/.exec(className || '');
+                                return !inline && match ? (
+                                  <div className="relative group mt-2 mb-2">
+                                    <CopyButton text={String(children).replace(/\n$/, '')} />
+                                    <SyntaxHighlighter
+                                      style={isDarkMode ? vscDarkPlus : vs}
+                                      language={match[1]}
+                                      PreTag="div"
+                                      className="rounded-xl !bg-muted/50 !mt-0 !mb-0 text-[13px]"
+                                      {...props}
+                                    >
+                                      {String(children).replace(/\n$/, '')}
+                                    </SyntaxHighlighter>
+                                  </div>
+                                ) : (
+                                  <code className={`${className} bg-muted/50 px-1.5 py-0.5 rounded-md font-mono text-xs`} {...props}>{children}</code>
+                                );
+                              },
+                              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                              ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
+                              ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
+                              a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline underline-offset-4 font-medium">{children}</a>,
+                            }}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        )}
                       </div>
                     </div>
                     <span className="text-[10px] text-muted-foreground/70 font-medium px-2">
@@ -694,14 +886,20 @@ function App() {
                   className="flex flex-wrap gap-2 pb-2"
                 >
                   {attachments.map((file, index) => (
-                    <div key={index} className="flex items-center gap-2 bg-secondary/80 border border-border px-3 py-1.5 rounded-xl text-xs group relative">
-                      {file.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
-                      <span className="max-w-[120px] truncate">{file.file_name}</span>
+                    <div key={index} className="flex items-center gap-2 bg-secondary/80 border border-border pr-2 py-1 rounded-xl text-xs group relative overflow-hidden">
+                      {file.mime_type.startsWith('image/') ? (
+                        <img src={`data:${file.mime_type};base64,${file.data}`} alt={file.file_name} className="w-8 h-8 object-cover rounded-lg ml-1" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center ml-1">
+                          <FileText className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                      )}
+                      <span className="max-w-[120px] truncate font-medium">{file.file_name}</span>
                       <button 
                         onClick={() => removeAttachment(index)}
-                        className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded-full transition-colors"
+                        className="p-1 hover:bg-destructive/10 hover:text-destructive rounded-full transition-colors"
                       >
-                        <X className="w-3 h-3" />
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   ))}

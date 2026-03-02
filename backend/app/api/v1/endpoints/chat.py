@@ -28,10 +28,35 @@ async def create_session(session_in: SessionCreate, db: AsyncSession = Depends(g
     await db.refresh(session)
     return session
 
+from sqlalchemy import func, desc, nullslast
+
 @router.get("/sessions", response_model=List[Session])
 async def get_sessions(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ChatSession).order_by(ChatSession.updated_at.desc()))
+    # Sort by is_pinned first, then updated_at
+    result = await db.execute(
+        select(ChatSession).order_by(
+            nullslast(desc(ChatSession.is_pinned)), 
+            desc(ChatSession.updated_at)
+        )
+    )
     return result.scalars().all()
+
+@router.patch("/sessions/{session_id}/pin", response_model=Session)
+async def pin_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ChatSession).filter(ChatSession.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Toggle pinning: if pinned, unpin (None); if unpinned, pin (current time)
+    if session.is_pinned:
+        session.is_pinned = None
+    else:
+        session.is_pinned = datetime.utcnow()
+        
+    await db.commit()
+    await db.refresh(session)
+    return session
 
 @router.get("/sessions/{session_id}", response_model=SessionWithMessages)
 async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
@@ -286,3 +311,22 @@ async def delete_message(message_id: UUID, db: AsyncSession = Depends(get_db)):
     await db.delete(message)
     await db.commit()
     return {"status": "success"}
+
+@router.patch("/messages/{message_id}")
+async def update_message(message_id: UUID, message_in: MessageCreate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ChatMessage).filter(ChatMessage.id == message_id))
+    message = result.scalar_one_or_none()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    if message_in.content:
+        message.content = message_in.content
+        
+    await db.commit()
+    await db.refresh(message)
+    return {
+        "id": message.id,
+        "role": message.role,
+        "content": message.content,
+        "created_at": message.created_at
+    }

@@ -23,6 +23,7 @@ class ChatSession(Base):
     cli_id = Column(UUID(as_uuid=True), ForeignKey("clis.id"), nullable=True)
     path = Column(String, nullable=False, default="/home/niceiyke")
     external_session_id = Column(String, nullable=True)
+    is_pinned = Column(DateTime, nullable=True)  # Use DateTime to allow sorting by pin time
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

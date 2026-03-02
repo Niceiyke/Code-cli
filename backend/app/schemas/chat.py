@@ -62,6 +62,7 @@ class SessionBase(BaseModel):
     cli_id: Optional[UUID] = None
     path: str = "/home/niceiyke"
     external_session_id: Optional[str] = None
+    is_pinned: Optional[datetime] = None
 
 class SessionCreate(SessionBase):
     pass
@@ -71,6 +72,7 @@ class Session(SessionBase):
     created_at: datetime
     updated_at: datetime
     cli_id: Optional[UUID] = None
+    is_pinned: Optional[datetime] = None
     
     class Config:
         from_attributes = True
