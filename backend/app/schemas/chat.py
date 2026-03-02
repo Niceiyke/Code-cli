@@ -69,6 +69,7 @@ class SessionCreate(SessionBase):
 class Session(SessionBase):
     id: UUID
     created_at: datetime
+    updated_at: datetime
     cli_id: Optional[UUID] = None
     
     class Config:

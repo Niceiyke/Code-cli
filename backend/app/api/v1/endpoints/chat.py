@@ -30,7 +30,7 @@ async def create_session(session_in: SessionCreate, db: AsyncSession = Depends(g
 
 @router.get("/sessions", response_model=List[Session])
 async def get_sessions(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ChatSession).order_by(ChatSession.created_at.desc()))
+    result = await db.execute(select(ChatSession).order_by(ChatSession.updated_at.desc()))
     return result.scalars().all()
 
 @router.get("/sessions/{session_id}", response_model=SessionWithMessages)
@@ -57,6 +57,7 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
         "cli_id": session.cli_id,
         "path": session.path,
         "created_at": session.created_at,
+        "updated_at": session.updated_at,
         "messages": [
             {
                 "id": m.id,
@@ -107,6 +108,7 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
 
     # 1. Save user message
     user_msg = ChatMessage(session_id=session_id, role="user", content=message_in.content)
+    session.updated_at = datetime.utcnow()
     
     attachments_payload = []
     if message_in.attachments:
@@ -191,13 +193,15 @@ async def n8n_callback(message_id: UUID, request: Request, db: AsyncSession = De
     
     # Save external session ID if provided
     external_session_id = data.get("session-id")
-    if external_session_id:
-        # Get the session associated with this message
-        session_result = await db.execute(
-            select(ChatSession).filter(ChatSession.id == message.session_id)
-        )
-        session = session_result.scalar_one_or_none()
-        if session:
+    
+    # Get the session associated with this message to update its timestamp
+    session_result = await db.execute(
+        select(ChatSession).filter(ChatSession.id == message.session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if session:
+        session.updated_at = datetime.utcnow()
+        if external_session_id:
             session.external_session_id = str(external_session_id)
 
     if output_content:
@@ -269,5 +273,16 @@ async def delete_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Session not found")
     
     await db.delete(session)
+    await db.commit()
+    return {"status": "success"}
+
+@router.delete("/messages/{message_id}")
+async def delete_message(message_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ChatMessage).filter(ChatMessage.id == message_id))
+    message = result.scalar_one_or_none()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    await db.delete(message)
     await db.commit()
     return {"status": "success"}

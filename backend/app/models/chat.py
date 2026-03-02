@@ -24,6 +24,7 @@ class ChatSession(Base):
     path = Column(String, nullable=False, default="/home/niceiyke")
     external_session_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     cli = relationship("CLI", back_populates="sessions")
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")

@@ -63,7 +63,7 @@ interface CLI {
 }
 
 // Components
-const CopyButton = ({ text }: { text: string }) => {
+const CopyButton = ({ text, className = "absolute right-2 top-2" }: { text: string, className?: string }) => {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     await navigator.clipboard.writeText(text);
@@ -71,7 +71,7 @@ const CopyButton = ({ text }: { text: string }) => {
     setTimeout(() => setCopied(false), 2000);
   };
   return (
-    <button onClick={handleCopy} className="absolute right-2 top-2 p-1.5 rounded-lg bg-secondary/80 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all z-10">
+    <button onClick={handleCopy} className={`${className} p-1.5 rounded-lg bg-secondary/80 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all z-10`}>
       {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
     </button>
   );
@@ -91,6 +91,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
+  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<{file_name: string, mime_type: string, data: string}[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -229,8 +230,11 @@ function App() {
     },
     onMutate: async (newMessage) => {
       await queryClient.cancelQueries({ queryKey: ['messages', newMessage.sessionId] });
+      await queryClient.cancelQueries({ queryKey: ['sessions'] });
       const previousMessages = queryClient.getQueryData(['messages', newMessage.sessionId]);
+      const previousSessions = queryClient.getQueryData(['sessions']);
       
+      // Optimistic update for messages
       queryClient.setQueryData(['messages', newMessage.sessionId], (old: any) => ({
         ...old,
         messages: [
@@ -251,13 +255,26 @@ function App() {
         ]
       }));
 
-      return { previousMessages };
+      // Optimistic update for sessions order
+      queryClient.setQueryData(['sessions'], (old: Session[] | undefined) => {
+        if (!old) return old;
+        const sessionIndex = old.findIndex(s => s.id === newMessage.sessionId);
+        if (sessionIndex === -1) return old;
+        
+        const updatedSessions = [...old];
+        const [movedSession] = updatedSessions.splice(sessionIndex, 1);
+        return [movedSession, ...updatedSessions];
+      });
+
+      return { previousMessages, previousSessions };
     },
     onError: (_err, newMessage, context) => {
       queryClient.setQueryData(['messages', newMessage.sessionId], context?.previousMessages);
+      queryClient.setQueryData(['sessions'], context?.previousSessions);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['messages', variables.sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
     }
   });
 
@@ -272,6 +289,18 @@ function App() {
       if (currentSessionId === sessionId) {
         setCurrentSessionId(null);
       }
+    }
+  });
+
+  const deleteMessageMutation = useMutation({
+    mutationFn: async (messageId: string) => {
+      await axios.delete(`${API_BASE_URL}/chat/messages/${messageId}`);
+    },
+    onSuccess: (_, messageId) => {
+      queryClient.setQueryData(['messages', currentSessionId], (old: any) => ({
+        ...old,
+        messages: (old?.messages || []).filter((m: Message) => m.id !== messageId)
+      }));
     }
   });
 
@@ -340,6 +369,16 @@ function App() {
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
     }
   }, [input]);
+
+  const formatDateTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
+  };
 
   const filteredSessions = sessions.filter(session => 
     session.title?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -435,7 +474,7 @@ function App() {
               <MessageSquare className={`w-4 h-4 flex-shrink-0 ${currentSessionId === session.id ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`} />
               <span className="truncate text-left pr-6">{session.title || 'Untitled Chat'}</span>
               <button
-                onClick={(e) => { e.stopPropagation(); deleteSessionMutation.mutate(session.id); }}
+                onClick={(e) => { e.stopPropagation(); setSessionToDelete(session.id); }}
                 className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-all"
                 title="Delete Chat"
               >
@@ -464,7 +503,7 @@ function App() {
         </button>
 
         {/* Header */}
-        <header className="h-16 border-b border-border flex items-center justify-between px-4 md:px-6 glass">
+        <header className="sticky top-0 z-20 h-16 border-b border-border flex items-center justify-between px-4 md:px-6 glass">
           <div className="flex items-center gap-4 ml-8 md:ml-0 overflow-hidden">
             <button 
               onClick={() => setIsSearchOpen(true)}
@@ -478,7 +517,14 @@ function App() {
             </button>
           </div>
           <div className="flex items-center gap-2 md:gap-4">
-            <button onClick={() => setIsSearchOpen(true)} className="bg-secondary p-2 rounded-full hover:bg-muted transition-colors"><Search className="w-4 h-4 text-muted-foreground" /></button>
+            <button 
+              onClick={() => setIsSearchOpen(true)} 
+              className="md:hidden bg-secondary p-2 rounded-full hover:bg-muted transition-colors"
+              title="Recent Conversations"
+            >
+              <MessageSquare className="w-4 h-4 text-muted-foreground" />
+            </button>
+            <button onClick={() => setIsSearchOpen(true)} className="bg-secondary p-2 rounded-full hover:bg-muted transition-colors" title="Search (Ctrl+K)"><Search className="w-4 h-4 text-muted-foreground" /></button>
             <button onClick={() => setIsProfileOpen(true)} className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center border border-primary/30 hover:bg-primary/30 transition-colors"><User className="w-4 h-4 text-primary" /></button>
           </div>
         </header>
@@ -520,71 +566,97 @@ function App() {
                   key={message.id}
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  <div className={`flex gap-3 md:gap-4 max-w-[95%] md:max-w-[85%] ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                    <div className={`w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center ${
-                      message.role === 'user' ? 'bg-primary shadow-sm' : 'bg-card border border-border shadow-sm'
-                    }`}>
-                      {message.role === 'user' ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-primary" />}
-                    </div>
-                    <div className={`p-3 md:p-4 rounded-2xl text-sm leading-relaxed break-words prose dark:prose-invert max-w-none shadow-sm ${
-                      message.role === 'user' 
-                        ? 'bg-primary text-white' 
-                        : 'bg-card border border-border'
-                    }`}>
-                      {message.attachments && message.attachments.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mb-3">
-                          {message.attachments.map((att) => (
-                            <div key={att.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs group/att ${
-                              message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
-                            }`}>
-                              {att.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
-                              <span className="max-w-[150px] truncate">{att.file_name}</span>
-                              {att.id.startsWith('opt-att-') ? null : (
-                                <a 
-                                  href={`${API_BASE_URL}/chat/attachments/${att.id}`} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="ml-1 opacity-0 group-hover/att:opacity-100 transition-opacity hover:text-primary"
-                                  title="View Attachment"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                </a>
-                              )}
-                            </div>
-                          ))}
+                  <div className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} max-w-[95%] md:max-w-[85%] gap-1.5`}>
+                    <div className={`flex gap-3 md:gap-4 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                      <div className={`w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center ${
+                        message.role === 'user' ? 'bg-primary shadow-sm' : 'bg-card border border-border shadow-sm'
+                      }`}>
+                        {message.role === 'user' ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-primary" />}
+                      </div>
+                      <div className={`p-3 md:p-4 rounded-2xl text-sm leading-relaxed break-words prose dark:prose-invert max-w-none shadow-sm relative group/msg ${
+                        message.role === 'user' 
+                          ? 'bg-primary text-white' 
+                          : 'bg-card border border-border'
+                      }`}>
+                        <div className={`absolute top-2 right-2 flex gap-1 opacity-0 group-hover/msg:opacity-100 transition-opacity z-20`}>
+                          <CopyButton 
+                            text={message.content} 
+                            className={`p-1.5 rounded-lg transition-all ${
+                              message.role === 'user' ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-secondary/80 hover:bg-secondary text-muted-foreground hover:text-foreground'
+                            }`} 
+                          />
+                          <button
+                            onClick={() => {
+                              if (window.confirm('Are you sure you want to delete this message?')) {
+                                deleteMessageMutation.mutate(message.id);
+                              }
+                            }}
+                            className={`p-1.5 rounded-lg transition-all ${
+                              message.role === 'user' ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-secondary/80 hover:bg-secondary text-muted-foreground hover:text-destructive'
+                            }`}
+                            title="Delete message"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
-                      )}
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          code({ node, inline, className, children, ...props }: any) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            return !inline && match ? (
-                              <div className="relative group mt-2 mb-2">
-                                <CopyButton text={String(children).replace(/\n$/, '')} />
-                                <SyntaxHighlighter
-                                  style={isDarkMode ? vscDarkPlus : vs}
-                                  language={match[1]}
-                                  PreTag="div"
-                                  className="rounded-xl !bg-muted/50 !mt-0 !mb-0 text-[13px]"
-                                  {...props}
-                                >
-                                  {String(children).replace(/\n$/, '')}
-                                </SyntaxHighlighter>
+                        {message.attachments && message.attachments.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mb-3">
+                            {message.attachments.map((att) => (
+                              <div key={att.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs group/att ${
+                                message.role === 'user' ? 'bg-white/10 border-white/20' : 'bg-muted/50 border-border'
+                              }`}>
+                                {att.mime_type.startsWith('image/') ? <ImageIcon className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                                <span className="max-w-[150px] truncate">{att.file_name}</span>
+                                {att.id.startsWith('opt-att-') ? null : (
+                                  <a 
+                                    href={`${API_BASE_URL}/chat/attachments/${att.id}`} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="ml-1 opacity-0 group-hover/att:opacity-100 transition-opacity hover:text-primary"
+                                    title="View Attachment"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </a>
+                                )}
                               </div>
-                            ) : (
-                              <code className={`${className} bg-muted/50 px-1.5 py-0.5 rounded-md font-mono text-xs`} {...props}>{children}</code>
-                            );
-                          },
-                          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                          ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
-                          a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline underline-offset-4 font-medium">{children}</a>,
-                        }}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
+                            ))}
+                          </div>
+                        )}
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code({ node, inline, className, children, ...props }: any) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              return !inline && match ? (
+                                <div className="relative group mt-2 mb-2">
+                                  <CopyButton text={String(children).replace(/\n$/, '')} />
+                                  <SyntaxHighlighter
+                                    style={isDarkMode ? vscDarkPlus : vs}
+                                    language={match[1]}
+                                    PreTag="div"
+                                    className="rounded-xl !bg-muted/50 !mt-0 !mb-0 text-[13px]"
+                                    {...props}
+                                  >
+                                    {String(children).replace(/\n$/, '')}
+                                  </SyntaxHighlighter>
+                                </div>
+                              ) : (
+                                <code className={`${className} bg-muted/50 px-1.5 py-0.5 rounded-md font-mono text-xs`} {...props}>{children}</code>
+                              );
+                            },
+                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                            ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
+                            ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
+                            a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline underline-offset-4 font-medium">{children}</a>,
+                          }}
+                        >
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
                     </div>
+                    <span className="text-[10px] text-muted-foreground/70 font-medium px-2">
+                      {formatDateTime(message.created_at)}
+                    </span>
                   </div>
                 </motion.div>
               ))}
@@ -773,6 +845,44 @@ function App() {
                 </div>
                 <div className="pt-4 border-t border-border">
                   <p className="text-xs text-muted-foreground">Version 1.2.0</p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {sessionToDelete && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[110] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }} 
+              animate={{ opacity: 1, scale: 1 }} 
+              exit={{ opacity: 0, scale: 0.95 }} 
+              className="bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 text-center space-y-4">
+                <div className="w-16 h-16 bg-destructive/10 text-destructive rounded-full flex items-center justify-center mx-auto">
+                  <Trash2 className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">Delete Conversation?</h3>
+                  <p className="text-sm text-muted-foreground mt-1">This action cannot be undone. This will permanently delete the conversation history.</p>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => setSessionToDelete(null)}
+                    className="flex-1 px-4 py-2.5 bg-secondary hover:bg-muted font-medium rounded-xl transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => {
+                      deleteSessionMutation.mutate(sessionToDelete);
+                      setSessionToDelete(null);
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-destructive hover:bg-destructive/90 text-white font-medium rounded-xl transition-all shadow-lg shadow-destructive/20"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             </motion.div>
