@@ -89,6 +89,9 @@ The application expects an n8n webhook that accepts a JSON payload with:
 - `path`: Current working directory
 - `callback_url`: The URL n8n should POST the response back to
 
+The current VPS-hosted n8n workflow backup for this project is stored at `n8n/workflows/code-cli-3.workflow.json`.
+It was exported from the live `code-cli-3` workflow running in the local `n8n` Docker container.
+
 ## 📄 License
 
 This project is licensed under the MIT License.

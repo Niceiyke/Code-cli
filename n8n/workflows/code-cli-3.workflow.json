@@ -1,0 +1,776 @@
+[
+  {
+    "updatedAt": "2026-03-31T09:04:40.110Z",
+    "createdAt": "2026-03-02T17:16:40.460Z",
+    "id": "spqwWY9dMAappyCK",
+    "name": "code-cli-3",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "9623ab17-834d-44bc-b63b-f847295989af",
+          "responseMode": "responseNode",
+          "options": {
+            "rawBody": false
+          }
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -656,
+          80
+        ],
+        "id": "77064533-14ca-45a4-b541-5a24c8aa23f5",
+        "name": "Webhook",
+        "webhookId": "9623ab17-834d-44bc-b63b-f847295989af"
+      },
+      {
+        "parameters": {
+          "jsCode": "const body = $input.first().json.body || {};\n\nconst callbackUrl = body.callback_url || body.webhookUrl;\nconst requiredFields = ['path', 'clitype'];\nconst missingFields = requiredFields.filter((field) => !body[field]);\n\nif (!callbackUrl) {\n  missingFields.push('callback_url');\n}\n\nif (missingFields.length > 0) {\n  throw new Error(`Missing required fields: ${missingFields.join(', ')}`);\n}\n\nconst attachments = Array.isArray(body.attachments) ? body.attachments : [];\nconst prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';\n\nif (prompt.length === 0 && attachments.length === 0) {\n  throw new Error('Prompt or attachments required');\n}\n\nif (prompt.length > 5000) {\n  throw new Error('Prompt too long. Maximum 5000 characters');\n}\n\nconst clitype = String(body.clitype).toLowerCase().trim();\nconst validCliTypes = ['gemini', 'claude', 'codex'];\nif (!validCliTypes.includes(clitype)) {\n  throw new Error(`Invalid clitype. Must be one of: ${validCliTypes.join(', ')}`);\n}\n\nconst path = String(body.path).trim();\nif (!path.startsWith('/') || path.includes('..') || path.includes('~') || /[\\r\\n]/.test(path)) {\n  throw new Error('Invalid path. Must be an absolute path without .., ~, or newlines');\n}\n\nconst callbackUrlMatch = String(callbackUrl).trim().match(/^(https?):\\/\\/([^\\/?#:]+)(:\\d+)?(\\/.*)?$/i);\nif (!callbackUrlMatch) {\n  throw new Error('Invalid callback_url format');\n}\nconst callbackProtocol = `${callbackUrlMatch[1].toLowerCase()}:`;\nconst host = callbackUrlMatch[2].toLowerCase();\n\nif (!['http:', 'https:'].includes(callbackProtocol)) {\n  throw new Error('callback_url must use http or https');\n}\n\nconst forbiddenHostPatterns = [\n  /^localhost$/,\n  /^127\\./,\n  /^10\\./,\n  /^192\\.168\\./,\n  /^169\\.254\\./,\n  /^172\\.(1[6-9]|2\\d|3[0-1])\\./,\n  /^0\\.0\\.0\\.0$/,\n  /^::1$/,\n  /^fe80:/,\n  /^fc/i,\n  /^fd/i,\n];\nif (forbiddenHostPatterns.some((pattern) => pattern.test(host))) {\n  throw new Error('Forbidden callback_url host');\n}\n\nconst maxAttachments = 10;\nconst maxEncodedBytesPerAttachment = 10 * 1024 * 1024;\nconst maxApproxDecodedBytesTotal = 25 * 1024 * 1024;\nif (attachments.length > maxAttachments) {\n  throw new Error(`Too many attachments. Maximum ${maxAttachments}`);\n}\n\nlet approxDecodedBytesTotal = 0;\nfor (const [index, attachment] of attachments.entries()) {\n  if (!attachment || typeof attachment !== 'object') {\n    throw new Error(`Attachment ${index + 1} is invalid`);\n  }\n\n  const fileName = typeof attachment.file_name === 'string' ? attachment.file_name.trim() : '';\n  const data = typeof attachment.data === 'string' ? attachment.data.trim() : '';\n\n  if (!fileName) {\n    throw new Error(`Attachment ${index + 1} is missing file_name`);\n  }\n\n  if (!data) {\n    throw new Error(`Attachment ${index + 1} is missing data`);\n  }\n\n  if (data.length > maxEncodedBytesPerAttachment) {\n    throw new Error(`Attachment ${fileName} exceeds the maximum allowed size`);\n  }\n\n  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+|_+$/g, '');\n  if (!sanitizedFileName) {\n    throw new Error(`Attachment ${index + 1} has an invalid file_name`);\n  }\n\n  approxDecodedBytesTotal += Math.floor((data.length * 3) / 4);\n}\n\nif (approxDecodedBytesTotal > maxApproxDecodedBytesTotal) {\n  throw new Error('Attachments exceed the maximum total size');\n}\n\nconst hasVoiceNote = attachments.some((attachment) => {\n  const mimeType = typeof attachment.mime_type === 'string' ? attachment.mime_type : '';\n  return mimeType.startsWith('audio/');\n}) || body.has_voice_note === true;\n\nconst isResume = body.is_resume === true;\nlet sessionId = null;\nif (isResume) {\n  sessionId = body['session-id'] || body.session_id;\n  if (!sessionId || typeof sessionId !== 'string') {\n    throw new Error('session_id required when is_resume is true');\n  }\n  sessionId = sessionId.trim();\n  if (!sessionId || /[\\r\\n]/.test(sessionId)) {\n    throw new Error('Invalid session_id');\n  }\n}\n\nlet model = null;\nif (body.model !== undefined && body.model !== null && String(body.model).trim() !== '') {\n  model = String(body.model).trim();\n  if (!/^[a-zA-Z0-9._:-]+$/.test(model)) {\n    throw new Error('Invalid model value');\n  }\n}\n\nreturn {\n  path,\n  prompt,\n  clitype,\n  callback_url: String(callbackUrl).trim(),\n  is_resume: isResume,\n  has_voice_note: hasVoiceNote,\n  session_id: sessionId,\n  attachments,\n  model,\n  workflow_id: $input.first().json.headers['x-workflow-id'] || 'unknown',\n};"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -496,
+          80
+        ],
+        "id": "4ba572e4-b0c7-4a20-8663-c69231556f35",
+        "name": "Validate Input"
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.clitype }}",
+                      "rightValue": "gemini",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      },
+                      "id": "gemini-check"
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "gemini"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3
+                  },
+                  "conditions": [
+                    {
+                      "id": "claude-check",
+                      "leftValue": "={{ $json.clitype }}",
+                      "rightValue": "claude",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "claude"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3
+                  },
+                  "conditions": [
+                    {
+                      "id": "codex-check",
+                      "leftValue": "={{ $json.clitype }}",
+                      "rightValue": "codex",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "codex"
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "extra"
+          }
+        },
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3.4,
+        "position": [
+          -208,
+          192
+        ],
+        "id": "d1a30496-a2f8-4bcc-bd6d-e92a9ee9c1ff",
+        "name": "Route by CLI Type"
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $input.first().json;\nconst attachments = Array.isArray(data.attachments) ? data.attachments : [];\nconst hasAttachments = attachments.length > 0;\n\nconst shellEscape = (value) => `'${String(value).replace(/'/g, `'\\\\''`)}'`;\n\nconst safePath = shellEscape(data.path);\nconst safePromptPath = shellEscape(`${data.attachment_dir}/prompt.txt`);\nconst safeAttachmentDir = shellEscape(data.attachment_dir);\nconst workspaceFlag = hasAttachments ? `--include-directories ${safeAttachmentDir} ` : '';\nconst modelFlag = data.model ? `--model ${shellEscape(data.model)} ` : '';\nconst resumeFlag = data.is_resume && data.session_id ? `--resume ${shellEscape(data.session_id)} ` : '';\n\nconst command = [\n  `cd ${safePath}`,\n  `PROMPT=$(cat ${safePromptPath})`,\n  `timeout 1800 gemini --yolo ${workspaceFlag}${modelFlag}${resumeFlag}-p \"$PROMPT\" --output-format json 2>&1`,\n].join(' && ');\n\nreturn {\n  command,\n  cleanup_command: data.cleanup_command || 'true',\n  clitype: 'gemini',\n  callback_url: data.callback_url,\n  workflow_id: data.workflow_id,\n};"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          48,
+          80
+        ],
+        "id": "0ec5bbcb-a7ce-49d1-91bb-c4c7b914cc17",
+        "name": "Build Gemini Command"
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $input.first().json;\n\nconst shellEscape = (value) => `'${String(value).replace(/'/g, `'\\\\''`)}'`;\n\nconst safePath = shellEscape(data.path);\nconst safePromptPath = shellEscape(`${data.attachment_dir}/prompt.txt`);\nconst resumeFlag = data.is_resume && data.session_id ? `--resume ${shellEscape(data.session_id)} ` : '';\n\nconst command = [\n  `cd ${safePath}`,\n  `PROMPT=$(cat ${safePromptPath})`,\n  `timeout 1800 claude ${resumeFlag}-p \"$PROMPT\" --output-format json 2>&1`,\n].join(' && ');\n\nreturn {\n  command,\n  cleanup_command: data.cleanup_command || 'true',\n  clitype: 'claude',\n  callback_url: data.callback_url,\n  workflow_id: data.workflow_id,\n};"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          48,
+          240
+        ],
+        "id": "41f10990-0c58-4883-b2c9-e185fc4f22fd",
+        "name": "Build Claude Command"
+      },
+      {
+        "parameters": {
+          "command": "={{ $json.command }}"
+        },
+        "type": "n8n-nodes-base.ssh",
+        "typeVersion": 1,
+        "position": [
+          272,
+          240
+        ],
+        "id": "f5cc5686-b45e-4284-a822-f4197db05b60",
+        "name": "Execute SSH Command",
+        "credentials": {
+          "sshPassword": {
+            "id": "74S3y4gvV7bvzDYC",
+            "name": "SSH Password account"
+          }
+        },
+        "continueOnFail": true
+      },
+      {
+        "parameters": {
+          "jsCode": "const item = $input.first();\nconst metadata = $(\"Wait for Uploads\").first().json;\nconst clitype = item.json.clitype || metadata.clitype;\nconst workflowId = item.json.workflow_id || metadata.workflow_id;\nconst callbackUrl = item.json.callback_url || metadata.callback_url;\n\nif (item.json.error) {\n  return {\n    success: false,\n    error: item.json.error,\n    error_type: 'ssh_error',\n    clitype,\n    workflow_id: workflowId,\n    callback_url: callbackUrl,\n  };\n}\n\nconst stdout = item.json.stdout || '';\nconst stderr = item.json.stderr || '';\nconst combinedOutput = [stdout, stderr].filter(Boolean).join('\\n');\nconst exitCode = typeof item.json.exitCode === 'number' ? item.json.exitCode : null;\n\nif (!combinedOutput.trim()) {\n  return {\n    success: false,\n    error: 'No output received from CLI',\n    error_type: 'empty_output',\n    clitype,\n    workflow_id: workflowId,\n    callback_url: callbackUrl,\n  };\n}\n\nif (/\\btimeout\\b/i.test(combinedOutput)) {\n  return {\n    success: false,\n    error: 'Command execution timed out after 1800 seconds',\n    error_type: 'timeout',\n    raw_output: combinedOutput.slice(-4000),\n    clitype,\n    workflow_id: workflowId,\n    callback_url: callbackUrl,\n  };\n}\n\nfunction parseCodexJsonl(text) {\n  const lines = text.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);\n  const events = [];\n  for (const line of lines) {\n    if (!line.startsWith('{')) continue;\n    try {\n      events.push(JSON.parse(line));\n    } catch (error) {}\n  }\n\n  if (events.length === 0) {\n    return null;\n  }\n\n  const threadStarted = events.find((event) => event.type === 'thread.started');\n  const completedMessages = events.filter((event) => event.type === 'item.completed' && event.item && event.item.type === 'agent_message');\n  const lastMessage = completedMessages.length > 0 ? completedMessages[completedMessages.length - 1] : null;\n\n  return {\n    session_id: threadStarted?.thread_id || null,\n    response: lastMessage?.item?.text || '',\n    stats: events.find((event) => event.type === 'turn.completed')?.usage || null,\n  };\n}\n\nfunction extractJson(text) {\n  const start = text.indexOf('{');\n  const end = text.lastIndexOf('}');\n  if (start === -1 || end === -1 || end < start) {\n    return null;\n  }\n\n  const candidate = text.slice(start, end + 1);\n  try {\n    return JSON.parse(candidate);\n  } catch (error) {\n    const balancedMatches = text.match(/\\{(?:[^{}]|(\\{(?:[^{}]|(\\{[^{}]*\\}))*\\}))*\\}/g);\n    if (!balancedMatches) {\n      return null;\n    }\n\n    for (let index = balancedMatches.length - 1; index >= 0; index -= 1) {\n      try {\n        return JSON.parse(balancedMatches[index]);\n      } catch (innerError) {}\n    }\n\n    return null;\n  }\n}\n\ntry {\n  let data;\n  if (clitype === 'codex') {\n    data = parseCodexJsonl(combinedOutput);\n    if (!data) {\n      if (exitCode !== null && exitCode !== 0) {\n        return {\n          success: false,\n          error: `Codex exited with code ${exitCode}`,\n          error_type: 'execution_error',\n          raw_output: combinedOutput.slice(-10000),\n          clitype,\n          workflow_id: workflowId,\n          callback_url: callbackUrl,\n        };\n      }\n      throw new Error('No valid Codex JSONL events found in output');\n    }\n  } else {\n    data = extractJson(combinedOutput);\n    if (!data) {\n      if (exitCode !== null && exitCode !== 0) {\n        return {\n          success: false,\n          error: `CLI exited with code ${exitCode}`,\n          error_type: 'execution_error',\n          raw_output: combinedOutput.slice(-10000),\n          clitype,\n          workflow_id: workflowId,\n          callback_url: callbackUrl,\n        };\n      }\n\n      throw new Error('No valid JSON found in output');\n    }\n  }\n\n  let response = data.response;\n  if (typeof response === 'string') {\n    const trimmed = response.trim();\n    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {\n      try {\n        const innerData = JSON.parse(trimmed);\n        response = innerData.response || innerData;\n      } catch (error) {}\n    }\n  }\n\n  return {\n    success: true,\n    session_id: data.session_id || metadata.session_id || null,\n    response,\n    stats: data.stats || null,\n    clitype,\n    workflow_id: workflowId,\n    callback_url: callbackUrl,\n  };\n} catch (error) {\n  return {\n    success: false,\n    error: `Failed to parse CLI output: ${error.message}`,\n    error_type: 'parse_error',\n    raw_output: combinedOutput.slice(-10000),\n    clitype,\n    workflow_id: workflowId,\n    callback_url: callbackUrl,\n  };\n}"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          464,
+          144
+        ],
+        "id": "e60fe4ca-2c63-40cf-a32b-fd7a0ab036f3",
+        "name": "Parse CLI Output"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "version": 3,
+              "leftValue": "",
+              "caseSensitive": true,
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "success-check",
+                "leftValue": "={{ $json.success }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          592,
+          32
+        ],
+        "id": "90e76d2f-c907-4d85-a4a5-fe20b6b2b9a8",
+        "name": "Check Success"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "value": "={{ $json.session_id }}",
+                "name": "session_id",
+                "id": "session-id-underscore-field",
+                "type": "string"
+              },
+              {
+                "value": "={{ $json.session_id }}",
+                "name": "session-id",
+                "id": "session-id-field",
+                "type": "string"
+              },
+              {
+                "value": "={{ $json.response }}",
+                "name": "output",
+                "id": "output-field",
+                "type": "string"
+              },
+              {
+                "name": "status",
+                "id": "status-field",
+                "type": "string",
+                "value": "success"
+              },
+              {
+                "value": "={{ $json.clitype }}",
+                "type": "string",
+                "name": "clitype",
+                "id": "clitype-field"
+              },
+              {
+                "id": "workflow-id-field",
+                "type": "string",
+                "value": "={{ $json.workflow_id }}",
+                "name": "workflow_id"
+              },
+              {
+                "name": "callback_url",
+                "id": "callback-url-field",
+                "value": "={{ $json.callback_url }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          800,
+          0
+        ],
+        "id": "f751a264-4541-4836-82bf-00c51a1febd9",
+        "name": "Format Success Response"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "type": "string",
+                "name": "error",
+                "id": "error-field",
+                "value": "={{ $json.error }}"
+              },
+              {
+                "id": "error-type-field",
+                "value": "={{ $json.error_type }}",
+                "type": "string",
+                "name": "error_type"
+              },
+              {
+                "id": "status-error-field",
+                "type": "string",
+                "value": "error",
+                "name": "status"
+              },
+              {
+                "type": "string",
+                "name": "clitype",
+                "id": "clitype-error-field",
+                "value": "={{ $json.clitype }}"
+              },
+              {
+                "name": "workflow_id",
+                "id": "workflow-id-error-field",
+                "type": "string",
+                "value": "={{ $json.workflow_id }}"
+              },
+              {
+                "name": "raw_output",
+                "id": "raw-output-field",
+                "type": "string",
+                "value": "={{ $json.raw_output || '' }}"
+              },
+              {
+                "value": "={{ $json.callback_url }}",
+                "type": "string",
+                "name": "callback_url",
+                "id": "callback-url-error-field"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          800,
+          160
+        ],
+        "id": "c57dda5f-2c14-4645-a535-c7e7273d44e1",
+        "name": "Format Error Response"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $json.callback_url }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ $json }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1008,
+          112
+        ],
+        "id": "d050aae7-48d7-419c-92c2-19a215a41152",
+        "name": "Send Callback",
+        "continueOnFail": true
+      },
+      {
+        "parameters": {
+          "jsCode": "// Log callback result\nconst item = $input.first();\n\nif (item.json.error) {\n  console.log('Callback failed:', item.json.error);\n  return {\n    callback_status: 'failed',\n    callback_error: item.json.error\n  };\n}\n\nreturn {\n  callback_status: 'success',\n  callback_response_code: item.json.statusCode\n};"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1200,
+          112
+        ],
+        "id": "54997752-6639-4ee6-ac6e-56eb8c6a9f1b",
+        "name": "Log Callback Result"
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst attachments = Array.isArray(input.attachments) ? input.attachments : [];\n\nconst shellEscape = (value) => `'${String(value).replace(/'/g, `'\\\\''`)}'`;\nconst normalizeName = (value) => value.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+|_+$/g, '') || 'attachment';\n\nconst sessionTokenSource = input.session_id || Math.random().toString(36).slice(2);\nconst sessionToken = normalizeName(String(sessionTokenSource));\nconst tempDir = `/tmp/code-cli/${sessionToken}`;\n\nlet attachmentNote = '';\nif (attachments.length > 0) {\n  attachmentNote = '\\n\\nAttached files available in workspace:';\n}\n\nattachments.forEach((attachment) => {\n  attachmentNote += `\\n- ${normalizeName(String(attachment.file_name || 'attachment'))}`;\n});\n\nlet finalPrompt = input.prompt || '';\nif (input.has_voice_note === true) {\n  finalPrompt = `[VOICE NOTE ATTACHED] Please listen to the attached voice note and respond accordingly. ${finalPrompt}`.trim();\n}\n\nconst promptFileContent = `${finalPrompt}${attachmentNote}`.trim();\nconst setupDelimiter = 'PROMPT_EOF_CODE_CLI';\nconst items = [{\n  ...input,\n  upload_command: `mkdir -p ${shellEscape(tempDir)} && cat <<'${setupDelimiter}' > ${shellEscape(`${tempDir}/prompt.txt`)}\\n${promptFileContent}\\n${setupDelimiter}`,\n  is_setup: true,\n  attachment_note: attachmentNote,\n  attachment_dir: tempDir,\n  cleanup_command: `rm -rf ${shellEscape(tempDir)}`,\n}];\n\nattachments.forEach((attachment, index) => {\n  const safeFileName = normalizeName(String(attachment.file_name || `attachment-${index + 1}`));\n  const filePath = `${tempDir}/${safeFileName}`;\n  const delimiter = `FILE_EOF_${index}`;\n\n  items.push({\n    ...input,\n    upload_command: `base64 -d <<'${delimiter}' > ${shellEscape(filePath)}\\n${String(attachment.data || '').trim()}\\n${delimiter}`,\n    is_file: true,\n    file_name: safeFileName,\n    attachment_dir: tempDir,\n    cleanup_command: `rm -rf ${shellEscape(tempDir)}`,\n  });\n});\n\nreturn items;"
+        },
+        "id": "971a5f13-775a-496e-ba4b-177d17c052b1",
+        "name": "Handle Attachments",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -432,
+          272
+        ]
+      },
+      {
+        "parameters": {
+          "command": "={{ $json.upload_command }}"
+        },
+        "id": "3bc85626-7395-4174-abc2-ae5e35c68d14",
+        "name": "Upload File to Remote",
+        "type": "n8n-nodes-base.ssh",
+        "typeVersion": 1,
+        "position": [
+          -384,
+          560
+        ],
+        "credentials": {
+          "sshPassword": {
+            "id": "74S3y4gvV7bvzDYC",
+            "name": "SSH Password account"
+          }
+        },
+        "continueOnFail": true
+      },
+      {
+        "parameters": {
+          "jsCode": "const originalItems = $(\"Handle Attachments\").all();\nconst uploadResults = $input.all();\nconst setupItem = originalItems.find((item) => item.json.is_setup) || originalItems[0];\n\nif (!setupItem) {\n  throw new Error('Attachment setup metadata is missing');\n}\n\nif (uploadResults.length !== originalItems.length) {\n  throw new Error(`Expected ${originalItems.length} upload results but received ${uploadResults.length}`);\n}\n\nconst failedUpload = uploadResults.find((item) => {\n  if (item.json.error) {\n    return true;\n  }\n  if (typeof item.json.exitCode === 'number' && item.json.exitCode !== 0) {\n    return true;\n  }\n  return false;\n});\n\nif (failedUpload) {\n  const reason = failedUpload.json.error || failedUpload.json.stderr || `Upload exited with code ${failedUpload.json.exitCode}`;\n  throw new Error(`Attachment upload failed: ${reason}`);\n}\n\nreturn {\n  ...setupItem.json,\n  uploaded_item_count: uploadResults.length,\n};"
+        },
+        "id": "e4ee6ac6-354e-4341-8522-8b3641827f26",
+        "name": "Wait for Uploads",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -672,
+          496
+        ]
+      },
+      {
+        "parameters": {
+          "command": "={{ $node[\"Wait for Uploads\"].json.cleanup_command }}"
+        },
+        "id": "2fd3a519-02b4-4c9d-882e-b3690346153e",
+        "name": "Cleanup Remote Files",
+        "type": "n8n-nodes-base.ssh",
+        "typeVersion": 1,
+        "position": [
+          592,
+          256
+        ],
+        "credentials": {
+          "sshPassword": {
+            "id": "74S3y4gvV7bvzDYC",
+            "name": "SSH Password account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $input.first().json;\n\nconst shellEscape = (value) => `'${String(value).replace(/'/g, `'\\\\''`)}'`;\n\nconst safePath = shellEscape(data.path);\nconst safePromptPath = shellEscape(`${data.attachment_dir}/prompt.txt`);\nconst modelFlag = data.model ? ` -m ${shellEscape(data.model)}` : '';\n\nlet codexInvocation;\nif (data.is_resume && data.session_id) {\n  codexInvocation = `timeout 1800 codex exec resume --json --skip-git-repo-check${modelFlag} ${shellEscape(data.session_id)} \\\"$PROMPT\\\"`;\n} else {\n  codexInvocation = `timeout 1800 codex exec --json --skip-git-repo-check -C .${modelFlag} \\\"$PROMPT\\\"`;\n}\n\nconst command = [\n  `cd ${safePath}`,\n  `PROMPT=$(cat ${safePromptPath})`,\n  `${codexInvocation} 2>&1`,\n].join(' && ');\n\nreturn {\n  command,\n  cleanup_command: data.cleanup_command || 'true',\n  clitype: 'codex',\n  callback_url: data.callback_url,\n  workflow_id: data.workflow_id,\n};"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          32,
+          448
+        ],
+        "id": "f4ac31ee-56b2-4f5e-8f3b-6d5a9407fcb7",
+        "name": "Build Codex Command"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          1008,
+          -32
+        ],
+        "id": "0cbdd8a3-3d16-4bd4-8e55-a14b759d23c2",
+        "name": "Respond to Webhook"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Validate Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route by CLI Type": {
+        "main": [
+          [
+            {
+              "node": "Build Gemini Command",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Claude Command",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Codex Command",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Gemini Command": {
+        "main": [
+          [
+            {
+              "node": "Execute SSH Command",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Claude Command": {
+        "main": [
+          [
+            {
+              "node": "Execute SSH Command",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse CLI Output": {
+        "main": [
+          [
+            {
+              "node": "Check Success",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Cleanup Remote Files",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Success": {
+        "main": [
+          [
+            {
+              "node": "Format Success Response",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Format Error Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Success Response": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Send Callback",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Error Response": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Send Callback",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Callback": {
+        "main": [
+          [
+            {
+              "node": "Log Callback Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate Input": {
+        "main": [
+          [
+            {
+              "node": "Handle Attachments",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Handle Attachments": {
+        "main": [
+          [
+            {
+              "node": "Upload File to Remote",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Upload File to Remote": {
+        "main": [
+          [
+            {
+              "node": "Wait for Uploads",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Wait for Uploads": {
+        "main": [
+          [
+            {
+              "node": "Route by CLI Type",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Execute SSH Command": {
+        "main": [
+          [
+            {
+              "node": "Parse CLI Output",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Codex Command": {
+        "main": [
+          [
+            {
+              "node": "Execute SSH Command",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Respond to Webhook": {
+        "main": [
+          []
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "binaryMode": "separate",
+      "availableInMCP": false,
+      "callerPolicy": "workflowsFromSameOwner"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "pinData": {
+      "Webhook": [
+        {
+          "json": {
+            "headers": {
+              "host": "n8n.wordlyte.com",
+              "user-agent": "python-httpx/0.28.1",
+              "content-length": "334",
+              "accept": "*/*",
+              "accept-encoding": "gzip, br",
+              "cdn-loop": "cloudflare; loops=1",
+              "cf-connecting-ip": "167.86.77.153",
+              "cf-ipcountry": "FR",
+              "cf-ray": "9e4e29908fed5d26-CDG",
+              "cf-visitor": "{\"scheme\":\"https\"}",
+              "content-type": "application/json",
+              "x-forwarded-for": "104.23.229.20",
+              "x-forwarded-host": "n8n.wordlyte.com",
+              "x-forwarded-port": "443",
+              "x-forwarded-proto": "https",
+              "x-forwarded-server": "29d11edf3dd7",
+              "x-real-ip": "104.23.229.20"
+            },
+            "params": {},
+            "query": {},
+            "body": {
+              "clitype": "codex",
+              "session_id": "07fd247b-114f-4aaf-bd5e-e87426ab1d15",
+              "prompt": "Write a script for automation sample email",
+              "is_resume": false,
+              "has_voice_note": false,
+              "path": "/home/niceiyke",
+              "model": "gpt-5.4",
+              "callback_url": "https://api-code-cli.wordlyte.com/api/v1/chat/callback/e708d150-57db-4e87-99c3-5a3609a9b964",
+              "attachments": []
+            },
+            "webhookUrl": "https://n8n.wordlyte.com/webhook/9623ab17-834d-44bc-b63b-f847295989af",
+            "executionMode": "production"
+          },
+          "pairedItem": {
+            "item": 0
+          }
+        }
+      ]
+    },
+    "versionId": "96782035-9ec9-48cc-9e66-8a0ebcca23c3",
+    "activeVersionId": "e1e72192-27b7-45e6-9ae0-65753561a2fd",
+    "versionCounter": 128,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "updatedAt": "2026-02-16T21:19:29.881Z",
+        "createdAt": "2026-02-16T21:19:29.881Z",
+        "id": "QFWZD4wyBSxkZHGI",
+        "name": "secure"
+      },
+      {
+        "updatedAt": "2026-02-16T21:19:29.850Z",
+        "createdAt": "2026-02-16T21:19:29.850Z",
+        "id": "gMNnqg4VT8FKZxph",
+        "name": "ai-cli"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-03-02T17:16:40.477Z",
+        "createdAt": "2026-03-02T17:16:40.477Z",
+        "role": "workflow:owner",
+        "workflowId": "spqwWY9dMAappyCK",
+        "projectId": "EqoNKMa4WEhgIk8N",
+        "project": {
+          "updatedAt": "2026-02-08T13:07:57.049Z",
+          "createdAt": "2026-02-08T13:03:28.552Z",
+          "id": "EqoNKMa4WEhgIk8N",
+          "name": "Iyke David <iykedave04@gmail.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "73590e27-2a30-4f98-8372-70cd9a7f2744"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]
