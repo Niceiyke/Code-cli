@@ -23,12 +23,19 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/codecli
+      - PUBLIC_API_BASE_URL=${PUBLIC_API_BASE_URL:-https://api-code-cli.wordlyte.com}
+      - N8N_CALLBACK_BASE_URL=${N8N_CALLBACK_BASE_URL:-http://code-cli-backend:8000}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       db:
         condition: service_healthy
     networks:
-      - internal
-      - edge
+      internal: {}
+      edge:
+        aliases:
+          - code-cli-backend
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=edge"

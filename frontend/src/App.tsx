@@ -18,7 +18,6 @@ import {
   Loader2,
   Paperclip,
   FileText,
-  ImageIcon,
   Eye,
   Pencil,
   Pin,
@@ -58,15 +57,26 @@ interface Session {
   id: string;
   title: string | null;
   path: string;
+  model: string;
+  model_id?: string;
   created_at: string;
   cli_id?: string;
   is_pinned?: string;
+}
+
+interface AIModel {
+  id: string;
+  name: string;
+  display_name: string;
+  cli_id: string;
+  created_at: string;
 }
 
 interface CLI {
   id: string;
   name: string;
   description: string | null;
+  models: AIModel[];
 }
 
 // Components
@@ -87,18 +97,25 @@ const CopyButton = ({ text, className = "absolute right-2 top-2" }: { text: stri
 function App() {
   const queryClient = useQueryClient();
   const [selectedCliId, setSelectedCliId] = useState<string>(() => localStorage.getItem('selectedCliId') || '');
+  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('selectedModel') || 'gemini-2.0-flash-exp');
+  const [selectedModelId, setSelectedModelId] = useState<string>(() => localStorage.getItem('selectedModelId') || '');
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => localStorage.getItem('currentSessionId'));
   const [path, setPath] = useState(() => localStorage.getItem('workingPath') || '/home/niceiyke');
   const [input, setInput] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAddCliModalOpen, setIsAddCliModalOpen] = useState(false);
+  const [isAddModelModalOpen, setIsAddModelModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [_isProfileOpen, setIsProfileOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [newCliName, setNewCliName] = useState('');
   const [newCliDesc, setNewCliDesc] = useState('');
+  const [newModelName, setNewModelName] = useState('');
+  const [newModelDisplayName, setNewModelDisplayName] = useState('');
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+  const [modelToDelete, setModelToDelete] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<{file_name: string, mime_type: string, data: string}[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -109,6 +126,8 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const responsePollingStartedAtRef = useRef<number | null>(null);
+  const [responsePollingSessionId, setResponsePollingSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -126,12 +145,10 @@ function App() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent | ClipboardEvent) => {
     let files: FileList | File[] | null = null;
     
-    if ('files' in e && e.files) {
-      files = e.files;
+    if (e instanceof ClipboardEvent) {
+      files = Array.from(e.clipboardData?.files || []);
     } else if ('dataTransfer' in e && e.dataTransfer) {
       files = e.dataTransfer.files;
-    } else if ('clipboardData' in e && e.clipboardData) {
-      files = Array.from(e.clipboardData.files);
     } else if ('target' in e && (e.target as HTMLInputElement).files) {
       files = (e.target as HTMLInputElement).files;
     }
@@ -209,6 +226,8 @@ function App() {
 
   useEffect(() => { localStorage.setItem('workingPath', path); }, [path]);
   useEffect(() => { localStorage.setItem('selectedCliId', selectedCliId); }, [selectedCliId]);
+  useEffect(() => { localStorage.setItem('selectedModel', selectedModel); }, [selectedModel]);
+  useEffect(() => { localStorage.setItem('selectedModelId', selectedModelId); }, [selectedModelId]);
 
   // Queries
   const { data: sessions = [] } = useQuery<Session[]>({
@@ -228,6 +247,43 @@ function App() {
     }
   }, [clis, selectedCliId]);
 
+  // Update models when CLI changes
+  useEffect(() => {
+    if (selectedCliId) {
+      const cli = clis.find(c => c.id === selectedCliId);
+      if (cli && cli.models.length > 0) {
+        // Only auto-select if we don't have a model selected or it's not in the new CLI's models
+        const currentModelInCli = cli.models.find(m => m.id === selectedModelId);
+        if (!selectedModelId || !currentModelInCli) {
+          setSelectedModelId(cli.models[0].id);
+          setSelectedModel(cli.models[0].name);
+        }
+      } else {
+        setSelectedModelId('');
+      }
+    }
+  }, [selectedCliId, clis]);
+
+  const isTransientAiMessage = (message?: Message | null) => {
+    if (!message || message.role !== 'ai') return false;
+    return (
+      message.content === 'Thinking...' ||
+      message.content.startsWith('Failed to trigger n8n:') ||
+      message.content.startsWith('Error: n8n returned')
+    );
+  };
+
+  const sessionNeedsResponsePolling = (sessionData: any) => {
+    const sessionMessages = sessionData?.messages || [];
+    const latestMessage = sessionMessages[sessionMessages.length - 1] as Message | undefined;
+    const latestAiMessage = [...sessionMessages].reverse().find((m: Message) => m.role === 'ai');
+
+    if (isTransientAiMessage(latestAiMessage)) return true;
+    if (!latestAiMessage && latestMessage?.role === 'user') return true;
+
+    return false;
+  };
+
   const { data: currentSessionData } = useQuery({
     queryKey: ['messages', currentSessionId],
     queryFn: async () => {
@@ -238,12 +294,22 @@ function App() {
     refetchInterval: (query: any) => {
       const data = query.state.data;
       const messages = data?.messages || [];
-      const hasThinking = messages.some((m: Message) => m.content === 'Thinking...' && m.role === 'ai');
-      // Continue polling if thinking OR if it's a brand new session with no messages yet
-      // but we expect one (using a timestamp or isPending check)
+      const latestMessage = messages[messages.length - 1];
+      const latestAiMessage = [...messages].reverse().find((m: Message) => m.role === 'ai');
+      const latestAiIsTransient = latestAiMessage && (
+        latestAiMessage.content === 'Thinking...' ||
+        latestAiMessage.content.startsWith('Failed to trigger n8n:') ||
+        latestAiMessage.content.startsWith('Error: n8n returned')
+      );
+      const latestAiIsRecent = latestAiMessage
+        ? (Date.now() - new Date(latestAiMessage.created_at).getTime()) < 5 * 60 * 1000
+        : false;
+      const latestUserIsAwaitingReply = latestMessage?.role === 'user' &&
+        (Date.now() - new Date(latestMessage.created_at).getTime()) < 5 * 60 * 1000;
       const isNewSession = !data?.id || messages.length === 0;
-      return (hasThinking || isNewSession) ? 2000 : false;
+      return ((latestAiIsTransient && latestAiIsRecent) || latestUserIsAwaitingReply || isNewSession) ? 2000 : false;
     },
+    refetchIntervalInBackground: true,
   });
 
   const messages = currentSessionData?.messages || [];
@@ -254,7 +320,9 @@ function App() {
       return (await axios.post(`${API_BASE_URL}/chat/sessions`, {
         title: title,
         cli_id: selectedCliId || null,
-        path: path
+        model_id: selectedModelId || null,
+        path: path,
+        model: selectedModel
       })).data;
     },
     onSuccess: (newSession) => {
@@ -293,7 +361,14 @@ function App() {
               mime_type: a.mime_type,
               created_at: new Date().toISOString()
             }))
-          }
+          },
+          {
+            id: 'optimistic-ai-' + Date.now(),
+            role: 'ai',
+            content: 'Thinking...',
+            created_at: new Date().toISOString(),
+            attachments: []
+          },
         ]
       }));
 
@@ -317,8 +392,54 @@ function App() {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['messages', variables.sessionId] });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
+      queryClient.refetchQueries({ queryKey: ['messages', variables.sessionId], type: 'active' });
+      responsePollingStartedAtRef.current = Date.now();
+      setResponsePollingSessionId(variables.sessionId);
     }
   });
+
+  useEffect(() => {
+    if (!responsePollingSessionId) return;
+
+    let cancelled = false;
+
+    const pollSession = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/chat/sessions/${responsePollingSessionId}`);
+        if (cancelled) return;
+
+        const sessionData = response.data;
+        queryClient.setQueryData(['messages', responsePollingSessionId], sessionData);
+        queryClient.invalidateQueries({ queryKey: ['sessions'] });
+
+        const startedAt = responsePollingStartedAtRef.current ?? Date.now();
+        const exceededMaxWindow = Date.now() - startedAt > 5 * 60 * 1000;
+
+        if (!sessionNeedsResponsePolling(sessionData) || exceededMaxWindow) {
+          setResponsePollingSessionId(null);
+          responsePollingStartedAtRef.current = null;
+        }
+      } catch (error) {
+        console.error('Failed to poll session for AI response:', error);
+      }
+    };
+
+    pollSession();
+    const intervalId = window.setInterval(pollSession, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [queryClient, responsePollingSessionId]);
+
+  useEffect(() => {
+    if (!responsePollingSessionId || currentSessionId !== responsePollingSessionId) return;
+    if (!sessionNeedsResponsePolling(currentSessionData)) {
+      setResponsePollingSessionId(null);
+      responsePollingStartedAtRef.current = null;
+    }
+  }, [currentSessionData, currentSessionId, responsePollingSessionId]);
 
   const deleteSessionMutation = useMutation({
     mutationFn: async (sessionId: string) => {
@@ -352,6 +473,16 @@ function App() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    }
+  });
+
+  const updateSessionMutation = useMutation({
+    mutationFn: async ({ sessionId, model, modelId }: { sessionId: string; model: string; modelId?: string }) => {
+      return (await axios.patch(`${API_BASE_URL}/chat/sessions/${sessionId}`, { model, model_id: modelId })).data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['messages', currentSessionId] });
     }
   });
 
@@ -389,6 +520,41 @@ function App() {
       setIsAddCliModalOpen(false);
       setNewCliName('');
       setNewCliDesc('');
+    }
+  });
+
+  const createModelMutation = useMutation({
+    mutationFn: async ({ name, display_name, cli_id }: { name: string; display_name: string; cli_id: string }) => {
+      return (await axios.post(`${API_BASE_URL}/cli/models`, { name, display_name, cli_id })).data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clis'] });
+      setIsAddModelModalOpen(false);
+      setNewModelName('');
+      setNewModelDisplayName('');
+      setEditingModelId(null);
+    }
+  });
+
+  const updateModelMutation = useMutation({
+    mutationFn: async ({ id, name, display_name }: { id: string; name: string; display_name: string }) => {
+      return (await axios.patch(`${API_BASE_URL}/cli/models/${id}`, { name, display_name })).data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clis'] });
+      setIsAddModelModalOpen(false);
+      setEditingModelId(null);
+      setNewModelName('');
+      setNewModelDisplayName('');
+    }
+  });
+
+  const deleteModelMutation = useMutation({
+    mutationFn: async (modelId: string) => {
+      await axios.delete(`${API_BASE_URL}/cli/models/${modelId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clis'] });
     }
   });
 
@@ -431,6 +597,15 @@ function App() {
     setCurrentSessionId('new');
     if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
+
+  useEffect(() => {
+    if (currentSessionData?.model && currentSessionId !== 'new') {
+      setSelectedModel(currentSessionData.model);
+    }
+    if (currentSessionData?.model_id && currentSessionId !== 'new') {
+      setSelectedModelId(currentSessionData.model_id);
+    }
+  }, [currentSessionData, currentSessionId]);
 
   // Scroll to bottom
   useEffect(() => {
@@ -636,6 +811,75 @@ function App() {
           </div>
 
           <div className="space-y-1">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">AI Model</label>
+            <div className="flex gap-2">
+              <select 
+                value={selectedModelId}
+                onChange={(e) => {
+                  const mId = e.target.value;
+                  const selectedCli = clis.find(c => c.id === selectedCliId);
+                  const modelObj = selectedCli?.models.find(m => m.id === mId);
+                  if (modelObj) {
+                    setSelectedModelId(mId);
+                    setSelectedModel(modelObj.name);
+                    if (currentSessionId && currentSessionId !== 'new') {
+                      updateSessionMutation.mutate({ sessionId: currentSessionId, model: modelObj.name, modelId: mId });
+                    }
+                  } else {
+                    setSelectedModelId('');
+                  }
+                }}
+                className="flex-1 bg-secondary/50 border border-border text-foreground text-sm rounded-lg focus:ring-primary focus:border-primary block p-2 transition-all outline-none"
+              >
+                <option value="">Select Model</option>
+                {clis.find(c => c.id === selectedCliId)?.models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.display_name}</option>
+                ))}
+              </select>
+              <div className="flex gap-1">
+                {selectedModelId && (
+                  <>
+                    <button 
+                      onClick={() => {
+                        const m = clis.find(c => c.id === selectedCliId)?.models.find(mod => mod.id === selectedModelId);
+                        if (m) {
+                          setEditingModelId(m.id);
+                          setNewModelName(m.name);
+                          setNewModelDisplayName(m.display_name);
+                          setIsAddModelModalOpen(true);
+                        }
+                      }}
+                      className="p-2 bg-secondary hover:bg-muted border border-border rounded-lg transition-colors" 
+                      title="Edit Model"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => setModelToDelete(selectedModelId)}
+                      className="p-2 bg-secondary hover:bg-destructive/10 hover:text-destructive border border-border rounded-lg transition-colors" 
+                      title="Delete Model"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
+                <button 
+                  onClick={() => {
+                    setEditingModelId(null);
+                    setNewModelName('');
+                    setNewModelDisplayName('');
+                    setIsAddModelModalOpen(true);
+                  }} 
+                  className="p-2 bg-secondary hover:bg-muted border border-border rounded-lg transition-colors" 
+                  title="Add New Model"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Working Directory</label>
             <input type="text" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/home/niceiyke" className="w-full bg-secondary/50 border border-border text-foreground text-sm rounded-lg focus:ring-primary focus:border-primary block p-2 transition-all outline-none" />
           </div>
@@ -680,7 +924,7 @@ function App() {
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
-              {session.is_pinned && !currentSessionId === session.id && (
+              {session.is_pinned && currentSessionId !== session.id && (
                 <div className="absolute left-1 top-1">
                   <Pin className="w-2 h-2 text-primary rotate-45" />
                 </div>
@@ -1104,12 +1348,12 @@ function App() {
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
               <div className="p-6 border-b border-border flex items-center justify-between bg-muted/30">
-                <h3 className="text-xl font-bold">Add New CLI</h3>
+                <h3 className="text-xl font-bold">Add New CLI (clitype)</h3>
                 <button onClick={() => setIsAddCliModalOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="w-6 h-6" /></button>
               </div>
               <form onSubmit={(e) => { e.preventDefault(); createCliMutation.mutate({ name: newCliName, description: newCliDesc }); }} className="p-6 space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">CLI Name</label>
+                  <label className="text-sm font-medium">CLI Name (clitype)</label>
                   <input autoFocus required type="text" value={newCliName} onChange={(e) => setNewCliName(e.target.value)} placeholder="e.g. Gemini CLI" className="w-full bg-secondary/50 border border-border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all" />
                 </div>
                 <div className="space-y-2">
@@ -1119,6 +1363,48 @@ function App() {
                 <div className="pt-4 flex gap-3">
                   <button type="button" onClick={() => setIsAddCliModalOpen(false)} className="flex-1 px-4 py-2.5 bg-secondary hover:bg-muted font-medium rounded-xl transition-all">Cancel</button>
                   <button type="submit" disabled={createCliMutation.isPending} className="flex-1 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white font-medium rounded-xl transition-all shadow-lg shadow-primary/20">{createCliMutation.isPending ? 'Creating...' : 'Create CLI'}</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
+        {isAddModelModalOpen && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+              <div className="p-6 border-b border-border flex items-center justify-between bg-muted/30">
+                <h3 className="text-xl font-bold">{editingModelId ? 'Edit AI Model' : 'Add New Model for CLI'}</h3>
+                <button onClick={() => setIsAddModelModalOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="w-6 h-6" /></button>
+              </div>
+              <form onSubmit={(e) => { 
+                e.preventDefault(); 
+                if (editingModelId) {
+                  updateModelMutation.mutate({
+                    id: editingModelId,
+                    name: newModelName,
+                    display_name: newModelDisplayName
+                  });
+                } else if (selectedCliId) {
+                  createModelMutation.mutate({ 
+                    name: newModelName, 
+                    display_name: newModelDisplayName, 
+                    cli_id: selectedCliId 
+                  }); 
+                }
+              }} className="p-6 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Model ID (Internal Name)</label>
+                  <input autoFocus required type="text" value={newModelName} onChange={(e) => setNewModelName(e.target.value)} placeholder="e.g. gemini-2.0-flash-exp" className="w-full bg-secondary/50 border border-border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Display Name</label>
+                  <input required type="text" value={newModelDisplayName} onChange={(e) => setNewModelDisplayName(e.target.value)} placeholder="e.g. Gemini 2.0 Flash" className="w-full bg-secondary/50 border border-border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all" />
+                </div>
+                <div className="pt-4 flex gap-3">
+                  <button type="button" onClick={() => setIsAddModelModalOpen(false)} className="flex-1 px-4 py-2.5 bg-secondary hover:bg-muted font-medium rounded-xl transition-all">Cancel</button>
+                  <button type="submit" disabled={createModelMutation.isPending || updateModelMutation.isPending} className="flex-1 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white font-medium rounded-xl transition-all shadow-lg shadow-primary/20">
+                    {(createModelMutation.isPending || updateModelMutation.isPending) ? 'Saving...' : (editingModelId ? 'Save Changes' : 'Add Model')}
+                  </button>
                 </div>
               </form>
             </motion.div>
@@ -1141,6 +1427,44 @@ function App() {
                 </div>
                 <div className="pt-4 border-t border-border">
                   <p className="text-xs text-muted-foreground">Version 1.2.0</p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {modelToDelete && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[110] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }} 
+              animate={{ opacity: 1, scale: 1 }} 
+              exit={{ opacity: 0, scale: 0.95 }} 
+              className="bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 text-center space-y-4">
+                <div className="w-16 h-16 bg-destructive/10 text-destructive rounded-full flex items-center justify-center mx-auto">
+                  <Trash2 className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">Delete AI Model?</h3>
+                  <p className="text-sm text-muted-foreground mt-1">This will permanently remove this model from the CLI. This cannot be undone.</p>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => setModelToDelete(null)}
+                    className="flex-1 px-4 py-2.5 bg-secondary hover:bg-muted font-medium rounded-xl transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => {
+                      deleteModelMutation.mutate(modelToDelete);
+                      setModelToDelete(null);
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-destructive hover:bg-destructive/90 text-white font-medium rounded-xl transition-all shadow-lg shadow-destructive/20"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             </motion.div>

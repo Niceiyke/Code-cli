@@ -19,6 +19,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/codecli
       - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
+      - PUBLIC_API_BASE_URL=${PUBLIC_API_BASE_URL:-http://localhost:8000}
+      - N8N_CALLBACK_BASE_URL=${N8N_CALLBACK_BASE_URL:-http://backend:8000}
     ports:
       - "8000:8000"
     depends_on:

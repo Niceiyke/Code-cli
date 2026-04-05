@@ -14,6 +14,19 @@ class CLI(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     sessions = relationship("ChatSession", back_populates="cli")
+    models = relationship("AIModel", back_populates="cli", cascade="all, delete-orphan")
+
+class AIModel(Base):
+    __tablename__ = "ai_models"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)  # Internal model name like 'gemini-2.0-flash-exp'
+    display_name = Column(String, nullable=False)
+    cli_id = Column(UUID(as_uuid=True), ForeignKey("clis.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    cli = relationship("CLI", back_populates="models")
+    sessions = relationship("ChatSession", back_populates="ai_model")
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -21,13 +34,16 @@ class ChatSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String, nullable=True)
     cli_id = Column(UUID(as_uuid=True), ForeignKey("clis.id"), nullable=True)
+    model_id = Column(UUID(as_uuid=True), ForeignKey("ai_models.id"), nullable=True)
     path = Column(String, nullable=False, default="/home/niceiyke")
+    model = Column(String, nullable=False, default="gemini-2.0-flash-exp")
     external_session_id = Column(String, nullable=True)
     is_pinned = Column(DateTime, nullable=True)  # Use DateTime to allow sorting by pin time
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     cli = relationship("CLI", back_populates="sessions")
+    ai_model = relationship("AIModel", back_populates="sessions")
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
 
 class ChatMessage(Base):

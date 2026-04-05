@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -15,13 +15,37 @@ from typing import List
 router = APIRouter()
 
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
+N8N_CALLBACK_BASE_URL = os.getenv("N8N_CALLBACK_BASE_URL", "").strip().rstrip("/")
+
+
+def get_public_base_url(request: Request) -> str:
+    configured_base_url = os.getenv("PUBLIC_API_BASE_URL", "").strip().rstrip("/")
+    if configured_base_url:
+        return configured_base_url
+
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+
+    if forwarded_proto and forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host}"
+
+    return str(request.base_url).rstrip("/")
+
+
+def get_n8n_callback_base_url(request: Request) -> str:
+    if N8N_CALLBACK_BASE_URL:
+        return N8N_CALLBACK_BASE_URL
+
+    return get_public_base_url(request)
 
 @router.post("/sessions", response_model=Session)
 async def create_session(session_in: SessionCreate, db: AsyncSession = Depends(get_db)):
     session = ChatSession(
         title=session_in.title, 
         cli_id=session_in.cli_id,
-        path=session_in.path
+        model_id=session_in.model_id,
+        path=session_in.path,
+        model=session_in.model
     )
     db.add(session)
     await db.commit()
@@ -80,7 +104,9 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
         "id": session.id,
         "title": session.title,
         "cli_id": session.cli_id,
+        "model_id": session.model_id,
         "path": session.path,
+        "model": session.model,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "messages": [
@@ -104,7 +130,13 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
 from sqlalchemy import func
 
 @router.post("/sessions/{session_id}/messages", response_model=Message)
-async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSession = Depends(get_db)):
+async def send_message(
+    session_id: UUID,
+    message_in: MessageCreate,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     # Fetch session to get CLI info
     result = await db.execute(select(ChatSession).filter(ChatSession.id == session_id))
     session = result.scalar_one_or_none()
@@ -162,34 +194,100 @@ async def send_message(session_id: UUID, message_in: MessageCreate, db: AsyncSes
     await db.commit()
     await db.refresh(ai_msg, ["attachments"])
 
-    # 3. Fire-and-forget to n8n (with a short timeout for the trigger itself)
+    # 3. Fire-and-forget to n8n (with a longer timeout for the trigger itself)
     if N8N_WEBHOOK_URL:
-        async def trigger_n8n():
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                try:
-                    payload = {
-                        "clitype": cli_name,
-                        "session_id": str(session_id),
-                        "prompt": message_in.content,
-                        "is_resume": is_resume,
-                        "has_voice_note": has_voice_note,
-                        "path": session.path,
-                        "callback_url": f"https://api-code-cli.wordlyte.com/api/v1/chat/callback/{ai_msg.id}",
-                        "attachments": attachments_payload
-                    }
-                    # Send back the external session ID using the key n8n expects/provides
-                    if session.external_session_id:
-                        payload["session-id"] = session.external_session_id
-                        payload["external_session_id"] = session.external_session_id
-                    
-                    print(f"Triggering n8n with payload keys: {list(payload.keys())}")
-                    print(f"Number of attachments: {len(payload.get('attachments', []))}")
-                    await client.post(N8N_WEBHOOK_URL, json=payload)
-                except Exception as e:
-                    print(f"Error triggering n8n: {e}")
+        # Pre-capture values to avoid detached session issues in background task
+        session_path = session.path
+        session_model = session.model
+        external_session_id = session.external_session_id
+        ai_msg_id = ai_msg.id
+        
+        callback_base_url = get_n8n_callback_base_url(request)
 
-        import asyncio
-        asyncio.create_task(trigger_n8n())
+        async def trigger_n8n_task(
+            cli_name_arg, 
+            session_id_arg, 
+            prompt_arg, 
+            is_resume_arg, 
+            has_voice_note_arg, 
+            path_arg, 
+            model_arg, 
+            ai_msg_id_arg, 
+            external_session_id_arg, 
+            attachments_arg,
+            callback_base_url_arg,
+        ):
+            payload = {
+                "clitype": cli_name_arg,
+                "session_id": str(session_id_arg),
+                "prompt": prompt_arg,
+                "is_resume": is_resume_arg,
+                "has_voice_note": has_voice_note_arg,
+                "path": path_arg,
+                "model": model_arg,
+                "callback_url": f"{callback_base_url_arg}/api/v1/chat/callback/{ai_msg_id_arg}",
+                "attachments": attachments_arg
+            }
+            if external_session_id_arg:
+                payload["session-id"] = external_session_id_arg
+                payload["external_session_id"] = external_session_id_arg
+
+            import json
+            payload_size = len(json.dumps(payload))
+            print(f"Triggering n8n for {ai_msg_id_arg}. Payload size: {payload_size} bytes. Keys: {list(payload.keys())}")
+
+            try:
+                trigger_timeout = httpx.Timeout(connect=10.0, read=5.0, write=30.0, pool=5.0)
+                async with httpx.AsyncClient(timeout=trigger_timeout) as client:
+                    response = await client.post(N8N_WEBHOOK_URL, json=payload)
+                print(f"n8n response for {ai_msg_id_arg}: {response.status_code} {response.text}")
+
+                if response.status_code >= 400:
+                    # Update the message with an error if n8n rejects it
+                    from app.db.session import AsyncSessionLocal
+                    async with AsyncSessionLocal() as error_db:
+                        err_result = await error_db.execute(select(ChatMessage).filter(ChatMessage.id == ai_msg_id_arg))
+                        err_msg = err_result.scalar_one_or_none()
+                        if err_msg:
+                            err_msg.content = f"Error: n8n returned {response.status_code} - {response.text[:200]}"
+                            await error_db.commit()
+            except httpx.ReadTimeout:
+                # The workflow can still complete after the trigger request times out waiting
+                # for the webhook response, so leave the placeholder message in place.
+                print(f"Timed out waiting for n8n trigger response for {ai_msg_id_arg}; leaving placeholder for callback.")
+                return
+            except Exception as e:
+                print(f"Error triggering n8n for {ai_msg_id_arg}: {e}")
+                # Update the message with the error immediately instead of retrying.
+                last_error = e
+            else:
+                return
+
+            try:
+                from app.db.session import AsyncSessionLocal
+                async with AsyncSessionLocal() as error_db:
+                    err_result = await error_db.execute(select(ChatMessage).filter(ChatMessage.id == ai_msg_id_arg))
+                    err_msg = err_result.scalar_one_or_none()
+                    if err_msg and last_error is not None:
+                        err_msg.content = f"Failed to trigger n8n: {str(last_error)}"
+                        await error_db.commit()
+            except Exception as db_err:
+                print(f"Failed to update error message in DB: {db_err}")
+
+        background_tasks.add_task(
+            trigger_n8n_task,
+            cli_name,
+            session_id,
+            message_in.content,
+            is_resume,
+            has_voice_note,
+            session_path,
+            session_model,
+            ai_msg_id,
+            external_session_id,
+            attachments_payload,
+            callback_base_url,
+        )
 
     return ai_msg
 
@@ -276,19 +374,25 @@ async def get_attachment(attachment_id: UUID, db: AsyncSession = Depends(get_db)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to decode attachment: {str(e)}")
 
+from app.schemas.chat import MessageCreate, Session, SessionWithMessages, SessionCreate, Message, SessionUpdate
+
 @router.patch("/sessions/{session_id}", response_model=Session)
-async def update_session(session_id: UUID, session_in: SessionCreate, db: AsyncSession = Depends(get_db)):
+async def update_session(session_id: UUID, session_in: SessionUpdate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ChatSession).filter(ChatSession.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    if session_in.title:
+    if session_in.title is not None:
         session.title = session_in.title
-    if session_in.cli_id:
+    if session_in.cli_id is not None:
         session.cli_id = session_in.cli_id
-    if session_in.path:
+    if session_in.model_id is not None:
+        session.model_id = session_in.model_id
+    if session_in.path is not None:
         session.path = session_in.path
+    if session_in.model is not None:
+        session.model = session_in.model
         
     await db.commit()
     await db.refresh(session)
